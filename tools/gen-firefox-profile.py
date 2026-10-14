@@ -7,16 +7,14 @@ Runs on the Mac at install time:
 
 Produces in <out-dir>:
   org.mozilla.firefox.plist
-      The managed-preferences file installed to
-      /Library/Managed Preferences/org.mozilla.firefox.plist — the same file
-      a configuration profile would deliver, enforced directly by the
-      verifier (root-owned, outside any app bundle: no App-Management TCC,
-      survives Firefox updates; `profiles install` no longer exists on
-      macOS 27).
+      The expected managed-preferences content, used for inspection and
+      diagnostics. The configuration profile below is the live delivery
+      channel; Firefox does not honor a bare file copied into
+      /Library/Managed Preferences.
   org.mozilla.firefox.mobileconfig
-      Optional configuration profile for a one-time manual install via
-      System Settings -> Profiles (double-click). Adds UI-removal friction
-      on top of the plist channel.
+      Required configuration profile for a one-time manual install via
+      System Settings -> General -> Device Management (double-click first).
+      This is the live Firefox policy channel.
 """
 import json
 import os
@@ -38,15 +36,20 @@ def main():
     if not isinstance(policies, dict):
         sys.exit("ERROR: %s has no 'policies' object" % src)
 
+    # Unlike policies.json, Firefox's macOS preferences channel must be
+    # explicitly enabled before any of the other policy keys are read.
+    mac_policies = dict(policies)
+    mac_policies["EnterprisePoliciesEnabled"] = True
+
     plist_path = os.path.join(outdir, "org.mozilla.firefox.plist")
     with open(plist_path, "wb") as f:
-        plistlib.dump(policies, f)
-    print("wrote %s (%d policy keys)" % (plist_path, len(policies)))
+        plistlib.dump(mac_policies, f)
+    print("wrote %s (%d policy keys)" % (plist_path, len(mac_policies)))
 
     profile = {
         "PayloadContent": [
             {
-                "PayloadType": "com.apple.managed.preferences",
+                "PayloadType": "com.apple.ManagedClient.preferences",
                 "PayloadIdentifier": IDENTIFIER + ".managedprefs",
                 "PayloadUUID": PAYLOAD_UUID,
                 "PayloadVersion": 1,
@@ -55,7 +58,7 @@ def main():
                 "PayloadContent": {
                     "org.mozilla.firefox": {
                         "Forced": [
-                            {"mcx_domain_settings": policies}
+                            {"mcx_preference_settings": mac_policies}
                         ]
                     }
                 },

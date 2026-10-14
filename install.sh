@@ -103,10 +103,15 @@ install_local() {
   bash "$BASE/verifier.sh" check || true
 
   echo
-  if profiles show -type configuration 2>/dev/null | grep -q "com.chickenblocker.firefox"; then
-    echo "Firefox configuration profile: installed"
+  profile_user="${SUDO_USER:-$(stat -f %Su /dev/console 2>/dev/null || true)}"
+  profile_prefs="/Library/Managed Preferences/$profile_user/org.mozilla.firefox.plist"
+  if [ -n "$profile_user" ] &&
+     profiles show -type configuration -user "$profile_user" 2>/dev/null | grep -q "com.chickenblocker.firefox" &&
+     [ "$(plutil -extract EnterprisePoliciesEnabled raw -o - "$profile_prefs" 2>/dev/null || true)" = true ] &&
+     [ "$(plutil -extract DisablePrivateBrowsing raw -o - "$profile_prefs" 2>/dev/null || true)" = true ]; then
+    echo "Firefox configuration profile: installed and active for $profile_user"
   else
-    echo "[!] Firefox policies need a ONE-TIME manual profile install on the Mac:"
+    echo "[!] Firefox policies need a manual profile install/reinstall on the Mac:"
     echo "    Finder -> Cmd+Shift+G -> $BASE/expected"
     echo "    double-click org.mozilla.firefox.mobileconfig (stages it), then"
     echo "    System Settings -> General -> Device Management -> double-click the"

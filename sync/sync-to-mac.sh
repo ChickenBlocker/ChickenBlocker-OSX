@@ -36,6 +36,13 @@ for f in leechblockng-managed-storage.json pkf-managed-storage.json; do
     found=1
   fi
 done
+for f in userChrome.css userContent.css; do
+  if [ -f "$f" ]; then
+    install -m 0644 -o root -g wheel "$f" "$BASE/expected/$f"
+    echo "updated expected/$f"
+    found=1
+  fi
+done
 if [ -f extensions/page_keyword_filter.xpi ]; then
   install -m 0644 -o root -g wheel extensions/page_keyword_filter.xpi \
     "$BASE/expected/extensions/page_keyword_filter.xpi"

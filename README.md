@@ -13,11 +13,12 @@ breakdown and the macOS 27 findings (TCC, profiles, channels).
 
 | Channel                                                       | Live target on the Mac |
 | ------------------------------------------------------------- | ---------------------- |
-| Firefox policies — configuration profile `com.chickenblocker.firefox` (managed `org.mozilla.firefox` preferences) | System profile; verifier checks presence every cycle |
+| Firefox policies — user configuration profile `com.chickenblocker.firefox` (managed `org.mozilla.firefox` preferences) | User profile; verifier checks presence and materialized policy sentinels every cycle |
 | LeechBlock settings — managed-storage manifest                | `/Library/Application Support/Mozilla/ManagedStorage/leechblockng@proginosko.com.json` |
 | PKF keyword list — managed-storage manifest                   | `/Library/Application Support/Mozilla/ManagedStorage/page-keyword-filter-7f3a@local.addons.json` |
 | PKF extension `.xpi` (signed copy pushed from Linux; space-free `file://` URL) | `/usr/local/lib/ChickenBlocker/page_keyword_filter.xpi` (+ legacy copy under `BASE/extensions/`) |
 | Extension state — LeechBlock/PKF present and active in every Firefox profile | `<profile>/extensions.json`, repaired in place + `addonStartup` cache drop + controlled Firefox restart |
+| Firefox UI/content stylesheets synced from Linux | `<profile>/chrome/userChrome.css` and `userContent.css`; repaired for normal profiles |
 
 `BASE` is `/Library/Application Support/ChickenBlocker`.
 
@@ -27,6 +28,24 @@ direct-download link — no account) and the **Page Keyword Filter** extension
 (local `file://` xpi — nothing is downloaded from AMO), and lock both against
 removal/disabling. The LeechBlock settings arrive as a managed-storage
 manifest, snapshotted from the Linux machine's Firefox.
+
+The profile uses Mozilla's required macOS format:
+`com.apple.ManagedClient.preferences`, `mcx_preference_settings`, and
+`EnterprisePoliciesEnabled=true`. This exact schema was verified on the target
+Mac: it materializes at `/Library/Managed Preferences/<user>/org.mozilla.firefox.plist`
+and appears as Active in `about:policies`.
+
+Both managed extensions also set `ExtensionSettings.<id>.private_browsing=true`
+(Firefox 136+ / ESR 128.8+). Private browsing itself remains disabled, so this
+is defense in depth if a private window is already open or that policy changes.
+Using policy is preferred over editing Firefox's generated `extensions.json`.
+
+Direct LeechBlock options URLs are a separate surface from `about:addons`.
+`WebsiteFilter` blocks `moz-extension://*/options.html*` application-wide, so
+the rule works across profile-specific extension UUIDs and arbitrary Firefox
+profiles. `userChrome.css` additionally hides the LeechBlock toolbar action in
+normal profiles. The stylesheet preference is enabled and locked by policy;
+CSS is only a UI layer, while `WebsiteFilter` is the actual navigation block.
 
 Extension-state enforcement is a port of the Linux ChickenBlocker daemon:
 if a profile's `extensions.json` shows LeechBlock or PKF disabled or
@@ -88,8 +107,9 @@ sync/sync-to-mac.sh                  # extract only, into ./staged (gitignored)
 ```
 
 Extraction snapshots: LeechBlock settings (from Firefox's
-`storage-sync-v2.sqlite`), the live PKF keyword manifest, and the signed
-`.xpi`. Keyword words are printed as counts only and are never committed.
+`storage-sync-v2.sqlite`), the live PKF keyword manifest, the signed `.xpi`,
+and the Linux repository's `userChrome.css`/`userContent.css`. Keyword words
+are printed as counts only and are never committed.
 
 ## Verifier
 

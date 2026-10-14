@@ -1,18 +1,24 @@
 {
  "policies": {
     "BlockAboutAddons": true,
+    "BlockAboutConfig": true,
     "BlockAboutProfiles": true,
+    "BlockAboutSupport": true,
     "DisablePrivateBrowsing": true,
     "DisableDeveloperTools": true,
+    "DisableProfileRefresh": true,
+    "DisableSafeMode": true,
     "ExtensionUpdate": false,
     "ExtensionSettings": {
       "leechblockng@proginosko.com": {
         "installation_mode": "force_installed",
-        "install_url": "https://addons.mozilla.org/firefox/downloads/latest/leechblock-ng/latest.xpi"
+        "install_url": "https://addons.mozilla.org/firefox/downloads/latest/leechblock-ng/latest.xpi",
+        "private_browsing": true
       },
       "page-keyword-filter-7f3a@local.addons": {
         "installation_mode": "force_installed",
-        "install_url": "file:///usr/local/lib/ChickenBlocker/page_keyword_filter.xpi"
+        "install_url": "file:///usr/local/lib/ChickenBlocker/page_keyword_filter.xpi",
+        "private_browsing": true
       }
     },
     "Extensions": {
@@ -20,6 +26,17 @@
         "leechblockng@proginosko.com",
         "page-keyword-filter-7f3a@local.addons",
         "jid0-bnmfwWw2w2w4e4edvcdDbnMhdVg@jetpack"
+      ]
+    },
+    "Preferences": {
+      "toolkit.legacyUserProfileCustomizations.stylesheets": {
+        "Value": true,
+        "Status": "locked"
+      }
+    },
+    "WebsiteFilter": {
+      "Block": [
+        "moz-extension://*/options.html*"
       ]
     }
  }

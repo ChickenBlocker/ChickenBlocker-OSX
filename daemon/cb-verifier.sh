@@ -13,6 +13,7 @@
 #   /Library/Application Support/Mozilla/ManagedStorage/leechblockng@proginosko.com.json
 #   /Library/Application Support/Mozilla/ManagedStorage/page-keyword-filter-7f3a@local.addons.json
 #   BASE/extensions/page_keyword_filter.xpi
+#   <Firefox profile>/chrome/userChrome.css and userContent.css
 #
 # Extension enforcement (ports the Linux ChickenBlocker daemon): every Firefox
 # profile's extensions.json is checked for a disabled/missing LeechBlock or
@@ -58,6 +59,7 @@ FAIL=0
 SKIP=0
 REPAIRED=0
 REPAIRED_MANAGED=0
+REPAIRED_RESTART=0
 EXT_DRIFT_PROFILES=""
 CONSOLE_USER=""
 CONSOLE_UID=""
@@ -245,7 +247,7 @@ relaunch_firefox() {
   fi
 }
 
-# do_check <label> <expected-src> <live-dst> <managed-flag> [owner]
+# do_check <label> <expected-src> <live-dst> <managed-flag> [owner] [restart-flag]
 # Sets global counters; check mode reports, daemon/repair mode repairs.
 # owner defaults to root:wheel; the Firefox policies file is owned like the
 # app bundle itself so Firefox's updater does not fall back to elevated
@@ -256,6 +258,7 @@ do_check() {
   dst="$3"
   managed="$4"
   owner="${5:-root:wheel}"
+  restart="${6:-0}"
 
   if [ ! -f "$src" ]; then
     SKIP=$((SKIP+1))
@@ -290,6 +293,7 @@ do_check() {
      chown "$owner" "$dst.cb-new" && mv "$dst.cb-new" "$dst"; then
     REPAIRED=$((REPAIRED+1))
     [ "$managed" = 1 ] && REPAIRED_MANAGED=1
+    [ "$restart" = 1 ] && REPAIRED_RESTART=1
     log "REPAIRED $label ($problem): $dst"
   else
     rm -f "$dst.cb-new"
@@ -298,26 +302,70 @@ do_check() {
   fi
 }
 
+check_profile_stylesheets() {
+  if [ ! -f "$EXPECTED/userChrome.css" ] || [ ! -f "$EXPECTED/userContent.css" ]; then
+    SKIP=$((SKIP+1))
+    [ "$MODE" = check ] && echo "  [SKIP] profile-stylesheets — run sync-to-mac.sh"
+    return
+  fi
+  found=0
+  for prof in /Users/*/Library/Application\ Support/Firefox/Profiles/*/; do
+    [ -d "$prof" ] || continue
+    found=1
+    owner="$(stat -f '%Su:%Sg' "$prof" 2>/dev/null || echo root:wheel)"
+    if [ "$MODE" != check ] && [ ! -d "$prof/chrome" ]; then
+      mkdir -p "$prof/chrome"
+      chown "$owner" "$prof/chrome" 2>/dev/null || true
+    fi
+    name="$(basename "$prof")"
+    do_check "userChrome[$name]" "$EXPECTED/userChrome.css" \
+      "$prof/chrome/userChrome.css" 0 "$owner" 1
+    do_check "userContent[$name]" "$EXPECTED/userContent.css" \
+      "$prof/chrome/userContent.css" 0 "$owner" 1
+  done
+  if [ "$found" = 0 ]; then
+    SKIP=$((SKIP+1))
+    [ "$MODE" = check ] && echo "  [SKIP] profile-stylesheets — no Firefox profiles found"
+  fi
+}
+
 # check_firefox_policy_channel: Firefox policies arrive via the
-# locally-installed configuration profile (com.chickenblocker.firefox,
+# locally-installed user configuration profile (com.chickenblocker.firefox,
 # managed org.mozilla.firefox preferences). A bare file dropped into
 # /Library/Managed Preferences is NOT honored by Firefox, and macOS 27 has
-# no CLI to (re)install profiles — so this is check-only: check mode
-# reports; daemon mode warns (rate-limited) when the profile is missing.
+# no CLI to (re)install profiles — so this is check-only. Verify both profile
+# presence and materialized sentinel values; checking only the identifier can
+# falsely accept an obsolete system-scoped or incomplete profile.
 check_firefox_policy_channel() {
   if [ "$(id -u)" != 0 ]; then
     SKIP=$((SKIP+1))
     [ "$MODE" = check ] && echo "  [SKIP] firefox-profile — needs root (sudo)"
     return
   fi
-  if profiles show -type configuration 2>/dev/null | grep -q "com.chickenblocker.firefox"; then
+  resolve_console_user
+  problem=""
+  if [ -z "$CONSOLE_USER" ]; then
+    problem="no GUI console user"
+  elif ! profiles show -type configuration -user "$CONSOLE_USER" 2>/dev/null | grep -q "com.chickenblocker.firefox"; then
+    problem="not installed for $CONSOLE_USER"
+  else
+    prefs="/Library/Managed Preferences/$CONSOLE_USER/org.mozilla.firefox.plist"
+    if [ ! -f "$prefs" ]; then
+      problem="managed preferences not materialized for $CONSOLE_USER"
+    elif [ "$(plutil -extract EnterprisePoliciesEnabled raw -o - "$prefs" 2>/dev/null || true)" != true ]; then
+      problem="EnterprisePoliciesEnabled is not true (reinstall the current profile)"
+    elif [ "$(plutil -extract DisablePrivateBrowsing raw -o - "$prefs" 2>/dev/null || true)" != true ]; then
+      problem="DisablePrivateBrowsing is not true (reinstall the current profile)"
+    fi
+  fi
+  if [ -z "$problem" ]; then
     PASS=$((PASS+1))
-    [ "$MODE" = check ] && echo "  [PASS] firefox-profile — configuration profile installed"
+    [ "$MODE" = check ] && echo "  [PASS] firefox-profile — installed and active for $CONSOLE_USER"
     return
   fi
   if [ "$MODE" = check ]; then
     FAIL=$((FAIL+1))
-    echo "  [FAIL] firefox-profile — not installed (System Settings: install $EXPECTED/org.mozilla.firefox.mobileconfig)"
+    echo "  [FAIL] firefox-profile — $problem (System Settings: install $EXPECTED/org.mozilla.firefox.mobileconfig)"
     return
   fi
   now="$(date +%s)"
@@ -326,12 +374,12 @@ check_firefox_policy_channel() {
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
   if [ $((now - last)) -ge 3600 ]; then
     echo "$now" > "$BASE/.profile-warn-last" 2>/dev/null || true
-    log "WARN firefox-profile missing — install $EXPECTED/org.mozilla.firefox.mobileconfig via System Settings"
+    log "WARN firefox-profile inactive: $problem — install $EXPECTED/org.mozilla.firefox.mobileconfig via System Settings"
   fi
 }
 
 run_pass() {
-  PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; EXT_DRIFT_PROFILES=""
+  PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; REPAIRED_RESTART=0; EXT_DRIFT_PROFILES=""
 
   check_firefox_policy_channel
 
@@ -352,6 +400,7 @@ run_pass() {
     "$BASE/extensions/page_keyword_filter.xpi" 0
 
   check_extension_state
+  check_profile_stylesheets
 
   if [ "$MODE" = check ]; then
     if [ -f "$PLIST" ]; then
@@ -412,12 +461,13 @@ recovery() {
   fi
 
   want_managed_restart=0
-  [ "$REPAIRED_MANAGED" = 1 ] && [ "$RESTART_FIREFOX_ON_REPAIR" = 1 ] && want_managed_restart=1
+  { [ "$REPAIRED_MANAGED" = 1 ] || [ "$REPAIRED_RESTART" = 1 ]; } &&
+    [ "$RESTART_FIREFOX_ON_REPAIR" = 1 ] && want_managed_restart=1
 
   if [ "$want_managed_restart" = 1 ] || [ "$killed" = 1 ]; then
     if [ "$was_running" = 1 ]; then
       if firefox_running; then
-        log "managed storage repaired while Firefox running — controlled restart"
+        log "Firefox state repaired while running — controlled restart"
         quit_firefox
         killed=1
       fi

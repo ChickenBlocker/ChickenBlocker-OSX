@@ -13,6 +13,8 @@ Runs on the LINUX ChickenBlocker machine. Produces macOS-ready files:
   extensions/page_keyword_filter.xpi
       The signed PKF extension (force-installed on the Mac via a file://
       install_url; nothing is downloaded from AMO).
+  userChrome.css / userContent.css
+      Firefox profile UI/content hardening copied from the Linux repository.
 
 Keyword words are never printed (counts only) and never committed: the output
 directory defaults to <repo>/staged, which is gitignored.
@@ -28,6 +30,7 @@ import argparse
 import glob
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -228,6 +231,12 @@ def main():
         with open(os.path.join(out, "extensions/page_keyword_filter.xpi"), "wb") as f:
             f.write(data)
 
+    for name in ("userChrome.css", "userContent.css"):
+        src = os.path.join(linux_repo, name)
+        if not os.path.isfile(src):
+            die("missing Firefox profile stylesheet: %s" % src)
+        shutil.copyfile(src, os.path.join(out, name))
+
     kw5, kw6 = keyword_counts(lb)
     print("LeechBlock settings : %s" % sqlite_path)
     print("  numSets=%s active=%d  set5 keywords=%d  set6 url-words=%d" % (
@@ -240,6 +249,7 @@ def main():
     else:
         print("PKF extension (.xpi): NOT FOUND — PKF cannot force-install on "
               "the Mac until an xpi is available", file=sys.stderr)
+    print("Profile stylesheets   : userChrome.css, userContent.css")
     print("staged -> %s" % out)
 
 
