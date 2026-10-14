@@ -129,9 +129,22 @@ ext_ids() {
   printf '%s' "$ids"
 }
 
+# run_user: run a command as the console GUI user. The root daemon context
+# is TCC-blocked (App Data / Full Disk Access) from Firefox's profile
+# container even as root, while the user's own context reads it freely.
+run_user() {
+  launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" "$@"
+}
+
 # check_extension_state: audit all profiles; daemon/repair mode records drift
-# profiles in EXT_DRIFT_PROFILES (newline-separated).
+# profiles in EXT_DRIFT_PROFILES (newline-separated). Profile discovery and
+# the JSON check both run as the console user (see run_user).
 check_extension_state() {
+  if [ "$(id -u)" != 0 ]; then
+    SKIP=$((SKIP+1))
+    [ "$MODE" = check ] && echo "  [SKIP] extension-state — needs root (sudo)"
+    return
+  fi
   if ! command -v python3 >/dev/null 2>&1; then
     SKIP=$((SKIP+1))
     [ "$MODE" = check ] && echo "  [SKIP] extension-state — python3 not available on this Mac"
@@ -142,13 +155,30 @@ check_extension_state() {
     [ "$MODE" = check ] && echo "  [SKIP] extension-state — rules not synced yet"
     return
   fi
+  resolve_console_user
+  if [ -z "$CONSOLE_USER" ]; then
+    SKIP=$((SKIP+1))
+    [ "$MODE" = check ] && echo "  [SKIP] extension-state — no GUI console user"
+    return
+  fi
+  prof_list="$(run_user /bin/sh -c \
+    'ls -d "$HOME/Library/Application Support/Firefox/Profiles"/*/ 2>/dev/null' 2>/dev/null)"
+  if [ -z "$prof_list" ]; then
+    SKIP=$((SKIP+1))
+    if [ "$MODE" = check ]; then
+      echo "  [SKIP] extension-state — no Firefox profiles found"
+    else
+      log "EXTENSION-CHECK-ERROR no profile matched as user $CONSOLE_USER"
+    fi
+    return
+  fi
   ids="$(ext_ids)"
   found=0
-  for prof in /Users/*/Library/Application\ Support/Firefox/Profiles/*/; do
-    [ -f "$prof/extensions.json" ] || continue
+  while IFS= read -r prof; do
+    [ -n "$prof" ] || continue
     found=1
     name="$(basename "$prof")"
-    out="$(ext_py | python3 - check "$prof" $ids 2>"$BASE/.ext-err")"
+    out="$(ext_py | run_user /usr/bin/python3 - check "$prof" $ids 2>"$BASE/.ext-err")"
     rc=$?
     if [ "$rc" = 0 ]; then
       PASS=$((PASS+1))
@@ -165,37 +195,27 @@ check_extension_state() {
     else
       SKIP=$((SKIP+1))
       if [ "$MODE" = check ]; then
-        echo "  [SKIP] extension-state[$name] — extensions.json unreadable"
+        echo "  [SKIP] extension-state[$name] — extensions.json unreadable ($(head -1 "$BASE/.ext-err" 2>/dev/null))"
       else
         log "EXTENSION-CHECK-ERROR $name rc=$rc: $(head -1 "$BASE/.ext-err" 2>/dev/null)"
       fi
     fi
-  done
-  if [ "$found" = 0 ]; then
-    SKIP=$((SKIP+1))
-    if [ "$MODE" = check ]; then
-      echo "  [SKIP] extension-state — no Firefox profiles with extensions.json"
-    else
-      log "EXTENSION-CHECK-ERROR no profile matched the glob or none has extensions.json"
-    fi
-  fi
+  done <<< "$prof_list"
+  [ "$found" = 1 ] || SKIP=$((SKIP+1))
 }
 
 # repair_profile <dir>: re-enable drifted extensions in one profile's
 # extensions.json (Firefox must already be quit), drop the addonStartup cache.
-# Preserves the file's owner and mode.
+# Runs as the console user so the file keeps its owner and the daemon's root
+# context never touches the profile container.
 repair_profile() {
   prof="$1"
   ids="$(ext_ids)"
-  ext="$prof/extensions.json"
-  [ -f "$ext" ] || return
-  own="$(stat -f '%u:%g' "$ext" 2>/dev/null || true)"
-  mod="$(stat -f '%Lp' "$ext" 2>/dev/null || echo 644)"
-  out="$(ext_py | python3 - repair "$prof" $ids 2>/dev/null)"
+  resolve_console_user
+  [ -n "$CONSOLE_USER" ] || return
+  out="$(ext_py | run_user /usr/bin/python3 - repair "$prof" $ids 2>/dev/null)"
   if [ -n "$out" ]; then
-    [ -n "$own" ] && chown "$own" "$ext" 2>/dev/null
-    chmod "$mod" "$ext" 2>/dev/null
-    rm -f "$prof/addonStartup.json.lz4" "$prof/addonStartup.json"
+    run_user /bin/rm -f "$prof/addonStartup.json.lz4" "$prof/addonStartup.json" 2>/dev/null
     log "REPAIRED extensions.json in $prof: $out (startup cache dropped)"
   fi
 }
@@ -396,7 +416,7 @@ case "$MODE" in
     sleep_pid=""
     trap 'log "verifier stopped"; [ -n "$sleep_pid" ] && kill "$sleep_pid" 2>/dev/null; exit 0' INT TERM
     log "verifier started (pid $$, interval ${CHECK_INTERVAL}s)"
-    log "diag: python3=$(command -v python3 2>/dev/null || echo MISSING) ids=[$(ext_ids 2>/dev/null)] profiles=$(ls -d /Users/*/Library/Application\ Support/Firefox/Profiles/*/ 2>/dev/null | wc -l | tr -d ' ')"
+    log "diag: python3=$(command -v python3 2>/dev/null || echo MISSING) console=$(stat -f %Su /dev/console 2>/dev/null || echo ?) ids=[$(ext_ids 2>/dev/null)]"
     while :; do
       run_pass
       recovery
