@@ -40,6 +40,7 @@ CONF="$BASE/verifier.conf"
 PLIST="/Library/LaunchDaemons/com.chickenblocker.verifier.plist"
 CHECK_INTERVAL=15
 RESTART_FIREFOX_ON_REPAIR=1
+EXT_RESTART_MIN_INTERVAL=300
 [ -r "$CONF" ] && . "$CONF"
 
 LB_ID="leechblockng@proginosko.com"
@@ -227,13 +228,17 @@ relaunch_firefox() {
   fi
 }
 
-# do_check <label> <expected-src> <live-dst> <managed-flag>
+# do_check <label> <expected-src> <live-dst> <managed-flag> [owner]
 # Sets global counters; check mode reports, daemon/repair mode repairs.
+# owner defaults to root:wheel; the Firefox policies file is owned like the
+# app bundle itself so Firefox's updater does not fall back to elevated
+# (admin password) updates.
 do_check() {
   label="$1"
   src="$2"
   dst="$3"
   managed="$4"
+  owner="${5:-root:wheel}"
 
   if [ ! -f "$src" ]; then
     SKIP=$((SKIP+1))
@@ -246,7 +251,7 @@ do_check() {
     problem="missing"
   elif ! cmp -s "$src" "$dst"; then
     problem="content drift"
-  elif [ "$(stat -f '%Su:%Sg' "$dst" 2>/dev/null)" != "root:wheel" ] ||
+  elif [ "$(stat -f '%Su:%Sg' "$dst" 2>/dev/null)" != "$owner" ] ||
        [ "$(stat -f '%Lp' "$dst" 2>/dev/null)" != "644" ]; then
     problem="owner/mode"
   fi
@@ -265,7 +270,7 @@ do_check() {
 
   mkdir -p "$(dirname "$dst")"
   if cp "$src" "$dst.cb-new" && chmod 0644 "$dst.cb-new" &&
-     chown root:wheel "$dst.cb-new" && mv "$dst.cb-new" "$dst"; then
+     chown "$owner" "$dst.cb-new" && mv "$dst.cb-new" "$dst"; then
     REPAIRED=$((REPAIRED+1))
     [ "$managed" = 1 ] && REPAIRED_MANAGED=1
     log "REPAIRED $label ($problem): $dst"
@@ -283,9 +288,10 @@ run_pass() {
   for app in /Applications/Firefox.app /Users/*/Applications/Firefox.app; do
     [ -d "$app" ] || continue
     found_ff=1
+    app_owner="$(stat -f '%Su:%Sg' "$app" 2>/dev/null || echo root:wheel)"
     do_check "firefox-policies" \
       "$EXPECTED/firefox-policies.json" \
-      "$app/Contents/Resources/distribution/policies.json" 0
+      "$app/Contents/Resources/distribution/policies.json" 0 "$app_owner"
   done
   if [ "$found_ff" = 0 ]; then
     SKIP=$((SKIP+1))
@@ -334,15 +340,29 @@ recovery() {
   killed=0
 
   if [ -n "$EXT_DRIFT_PROFILES" ]; then
-    if [ "$was_running" = 1 ]; then
-      log "extension drift — quitting Firefox for extensions.json repair"
-      quit_firefox
-      killed=1
+    if [ "$was_running" != 1 ]; then
+      while IFS= read -r prof; do
+        [ -n "$prof" ] || continue
+        repair_profile "$prof"
+      done <<< "$EXT_DRIFT_PROFILES"
+    else
+      now="$(date +%s)"
+      last="$(cat "$BASE/.ext-restart-last" 2>/dev/null || echo 0)"
+      case "$now" in ''|*[!0-9]*) now=0 ;; esac
+      case "$last" in ''|*[!0-9]*) last=0 ;; esac
+      if [ $((now - last)) -ge "$EXT_RESTART_MIN_INTERVAL" ]; then
+        echo "$now" > "$BASE/.ext-restart-last" 2>/dev/null || true
+        log "extension drift — quitting Firefox for extensions.json repair"
+        quit_firefox
+        killed=1
+        while IFS= read -r prof; do
+          [ -n "$prof" ] || continue
+          repair_profile "$prof"
+        done <<< "$EXT_DRIFT_PROFILES"
+      else
+        log "extension drift persists — restart suppressed (rate limit ${EXT_RESTART_MIN_INTERVAL}s); install may be failing"
+      fi
     fi
-    while IFS= read -r prof; do
-      [ -n "$prof" ] || continue
-      repair_profile "$prof"
-    done <<< "$EXT_DRIFT_PROFILES"
   fi
 
   want_managed_restart=0

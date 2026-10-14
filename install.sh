@@ -35,7 +35,7 @@ install_local() {
     "$BASE" "$BASE/expected" "$BASE/expected/extensions" "$BASE/extensions"
   install -m 0755 -o root -g wheel "$REPO/daemon/cb-verifier.sh" "$BASE/verifier.sh"
   if [ ! -f "$BASE/verifier.conf" ]; then
-    printf 'CHECK_INTERVAL=15\nRESTART_FIREFOX_ON_REPAIR=1\n' > "$BASE/verifier.conf"
+    printf 'CHECK_INTERVAL=15\nRESTART_FIREFOX_ON_REPAIR=1\nEXT_RESTART_MIN_INTERVAL=300\n' > "$BASE/verifier.conf"
     chown root:wheel "$BASE/verifier.conf"
     chmod 0644 "$BASE/verifier.conf"
     echo ">> Wrote default $BASE/verifier.conf (preserved on reinstall)"
