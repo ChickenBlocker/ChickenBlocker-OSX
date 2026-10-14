@@ -98,8 +98,18 @@ install_local() {
   bash "$BASE/verifier.sh" check || true
 
   echo
-  echo "Done. Firefox policies are enforced;"
-  echo "LeechBlock + keyword rules must still be pushed from the Linux machine:"
+  fda="$(sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
+    "SELECT auth_value FROM access WHERE service='kTCCServiceSystemPolicyAllFiles' AND client='com.apple.bash';" 2>/dev/null || true)"
+  if [ "$fda" = "2" ]; then
+    echo "Full Disk Access for /bin/bash: granted"
+  else
+    echo "[!] For extension-state enforcement, grant Full Disk Access to /bin/bash:"
+    echo "    System Settings -> Privacy & Security -> Full Disk Access -> +"
+    echo "    (Cmd+Shift+G -> /bin/bash -> Open), then:"
+    echo "    sudo launchctl kickstart -k system/com.chickenblocker.verifier"
+  fi
+  echo
+  echo "Done. Rules are pushed from the Linux machine:"
   echo "  ChickenBlocker-OSX/sync/sync-to-mac.sh user@mac-host"
 }
 
