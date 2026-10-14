@@ -12,7 +12,7 @@
       },
       "page-keyword-filter-7f3a@local.addons": {
         "installation_mode": "force_installed",
-        "install_url": "file:///Library/Application%20Support/ChickenBlocker/extensions/page_keyword_filter.xpi"
+        "install_url": "file:///usr/local/lib/ChickenBlocker/page_keyword_filter.xpi"
       }
     },
     "Extensions": {

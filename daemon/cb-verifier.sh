@@ -308,6 +308,10 @@ run_pass() {
 
   do_check "pkf-extension" \
     "$EXPECTED/extensions/page_keyword_filter.xpi" \
+    "/usr/local/lib/ChickenBlocker/page_keyword_filter.xpi" 0
+
+  do_check "pkf-extension-legacy" \
+    "$EXPECTED/extensions/page_keyword_filter.xpi" \
     "$BASE/extensions/page_keyword_filter.xpi" 0
 
   check_extension_state

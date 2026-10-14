@@ -38,6 +38,9 @@ uninstall_local() {
         "$MS_DIR/page-keyword-filter-7f3a@local.addons.json"
   rmdir "$MS_DIR" "/Library/Application Support/Mozilla" 2>/dev/null || true
 
+  echo ">> Removing /usr/local/lib/ChickenBlocker"
+  rm -rf "/usr/local/lib/ChickenBlocker"
+
   echo ">> Removing $BASE"
   rm -rf "$BASE"
 
