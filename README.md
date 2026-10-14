@@ -28,6 +28,14 @@ Linux — nothing is downloaded from AMO), and lock them against
 removal/disabling. The LeechBlock settings themselves arrive as a Firefox
 managed-storage manifest, snapshotted from the Linux machine's Firefox.
 
+In addition (a port of the Linux ChickenBlocker daemon), every Firefox
+profile's `extensions.json` is checked each cycle: if the LeechBlock or PKF
+entry is `active: false` (or missing), Firefox is quit, the entry is
+re-enabled in place (`active=true`, `userDisabled=false`, preserving the
+file's owner/mode), the `addonStartup` cache is dropped, and Firefox is
+relaunched — but only if it was already running. This closes the
+disable-the-extension escape the file checks alone can't see.
+
 ## Layout
 
 ```text

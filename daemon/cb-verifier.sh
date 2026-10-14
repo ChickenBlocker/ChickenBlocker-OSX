@@ -14,10 +14,19 @@
 #   /Library/Application Support/Mozilla/ManagedStorage/page-keyword-filter-7f3a@local.addons.json
 #   BASE/extensions/page_keyword_filter.xpi
 #
+# Extension enforcement (ports the Linux ChickenBlocker daemon): every Firefox
+# profile's extensions.json is checked for a disabled/missing LeechBlock or
+# Page Keyword Filter entry. On drift: Firefox is quit, the entry is
+# re-enabled in extensions.json (active=true, userDisabled=false), the
+# addonStartup cache is dropped, and Firefox is relaunched — but only if it
+# was running before (never started on its own).
+#
 # Config: BASE/verifier.conf — CHECK_INTERVAL (seconds, default 15),
 #         RESTART_FIREFOX_ON_REPAIR (0/1, default 1: when a managed-storage
 #         file had to be repaired while Firefox is running, quit and relaunch
 #         Firefox so LeechBlock re-copies the managed configuration).
+#         Extension enforcement is NOT governed by this flag (it is the core
+#         enforcement, mirroring Linux).
 #
 # Security posture: root can stop this daemon and edit ordinary files. It is
 # the verifier/friction layer of the local track, not a root-resistant
@@ -36,6 +45,7 @@ RESTART_FIREFOX_ON_REPAIR=1
 LB_ID="leechblockng@proginosko.com"
 PKF_ID="page-keyword-filter-7f3a@local.addons"
 MS_DIR="/Library/Application Support/Mozilla/ManagedStorage"
+PROFILE_GLOB="/Users/*/Library/Application Support/Firefox/Profiles"
 
 MODE="${1:-daemon}"
 case "$MODE" in
@@ -48,6 +58,9 @@ FAIL=0
 SKIP=0
 REPAIRED=0
 REPAIRED_MANAGED=0
+EXT_DRIFT_PROFILES=""
+CONSOLE_USER=""
+CONSOLE_UID=""
 
 log() {
   printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOGFILE" 2>/dev/null || true
@@ -56,6 +69,162 @@ log() {
     if [ "$z" -gt 131072 ]; then
       tail -n 400 "$LOGFILE" > "$LOGFILE.cbtmp" 2>/dev/null && mv "$LOGFILE.cbtmp" "$LOGFILE"
     fi
+  fi
+}
+
+ext_py() {
+cat <<'PY'
+import json, os, sys
+mode, prof = sys.argv[1], sys.argv[2]
+ids = sys.argv[3:]
+path = os.path.join(prof, "extensions.json")
+try:
+    with open(path, "r") as f:
+        data = json.load(f)
+except Exception:
+    print("UNREADABLE"); sys.exit(2)
+addons = data.get("addons")
+if not isinstance(addons, list):
+    print("UNREADABLE"); sys.exit(2)
+
+def find(aid):
+    for a in addons:
+        if isinstance(a, dict) and a.get("id") == aid:
+            return a
+    return None
+
+if mode == "check":
+    bad = []
+    for aid in ids:
+        e = find(aid)
+        if e is None:
+            bad.append(aid.split("@")[0] + ":missing")
+        elif e.get("active") is not True:
+            bad.append(aid.split("@")[0] + ":inactive")
+    if bad:
+        print(" ".join(bad)); sys.exit(1)
+    print("OK"); sys.exit(0)
+
+changed = []
+for aid in ids:
+    e = find(aid)
+    if e is None:
+        changed.append(aid.split("@")[0] + ":missing(install-on-restart)")
+    elif e.get("active") is not True or e.get("userDisabled") is not False:
+        e["active"] = True
+        e["userDisabled"] = False
+        changed.append(aid.split("@")[0] + ":re-enabled")
+if changed:
+    tmp = path + ".cbtmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    os.rename(tmp, path)
+    print(",".join(changed))
+PY
+}
+
+ext_ids() {
+  ids="$LB_ID"
+  [ -f "$BASE/extensions/page_keyword_filter.xpi" ] && ids="$ids $PKF_ID"
+  printf '%s' "$ids"
+}
+
+# check_extension_state: audit all profiles; daemon/repair mode records drift
+# profiles in EXT_DRIFT_PROFILES (newline-separated).
+check_extension_state() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    SKIP=$((SKIP+1))
+    [ "$MODE" = check ] && echo "  [SKIP] extension-state — python3 not available on this Mac"
+    return
+  fi
+  if [ ! -f "$EXPECTED/leechblockng-managed-storage.json" ]; then
+    SKIP=$((SKIP+1))
+    [ "$MODE" = check ] && echo "  [SKIP] extension-state — rules not synced yet"
+    return
+  fi
+  ids="$(ext_ids)"
+  found=0
+  for prof in "$PROFILE_GLOB"/*/; do
+    [ -f "$prof/extensions.json" ] || continue
+    found=1
+    name="$(basename "$prof")"
+    out="$(ext_py | python3 - check "$prof" $ids 2>/dev/null)"
+    rc=$?
+    if [ "$rc" = 0 ]; then
+      PASS=$((PASS+1))
+      [ "$MODE" = check ] && echo "  [PASS] extension-state[$name] — extensions active"
+    elif [ "$rc" = 1 ]; then
+      if [ "$MODE" = check ]; then
+        FAIL=$((FAIL+1))
+        echo "  [FAIL] extension-state[$name] — $out"
+      else
+        EXT_DRIFT_PROFILES="${EXT_DRIFT_PROFILES}${prof}
+"
+        log "EXTENSION-DRIFT $name: $out"
+      fi
+    else
+      SKIP=$((SKIP+1))
+      [ "$MODE" = check ] && echo "  [SKIP] extension-state[$name] — extensions.json unreadable"
+    fi
+  done
+  if [ "$found" = 0 ]; then
+    SKIP=$((SKIP+1))
+    [ "$MODE" = check ] && echo "  [SKIP] extension-state — no Firefox profiles with extensions.json"
+  fi
+}
+
+# repair_profile <dir>: re-enable drifted extensions in one profile's
+# extensions.json (Firefox must already be quit), drop the addonStartup cache.
+# Preserves the file's owner and mode.
+repair_profile() {
+  prof="$1"
+  ids="$(ext_ids)"
+  ext="$prof/extensions.json"
+  [ -f "$ext" ] || return
+  own="$(stat -f '%u:%g' "$ext" 2>/dev/null || true)"
+  mod="$(stat -f '%Lp' "$ext" 2>/dev/null || echo 644)"
+  out="$(ext_py | python3 - repair "$prof" $ids 2>/dev/null)"
+  if [ -n "$out" ]; then
+    [ -n "$own" ] && chown "$own" "$ext" 2>/dev/null
+    chmod "$mod" "$ext" 2>/dev/null
+    rm -f "$prof/addonStartup.json.lz4" "$prof/addonStartup.json"
+    log "REPAIRED extensions.json in $prof: $out (startup cache dropped)"
+  fi
+}
+
+resolve_console_user() {
+  CONSOLE_USER=""
+  CONSOLE_UID="$(stat -f %u /dev/console 2>/dev/null || true)"
+  if [ -n "$CONSOLE_UID" ] && [ "$CONSOLE_UID" != 0 ]; then
+    CONSOLE_USER="$(id -nu "$CONSOLE_UID" 2>/dev/null || true)"
+  fi
+}
+
+firefox_running() { pgrep -x firefox >/dev/null 2>&1; }
+
+quit_firefox() {
+  resolve_console_user
+  if [ -n "$CONSOLE_USER" ]; then
+    launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
+      osascript -e 'tell application "Firefox" to quit' >/dev/null 2>&1 || true
+  fi
+  i=0
+  while [ "$i" -lt 10 ] && firefox_running; do
+    sleep 1
+    i=$((i+1))
+  done
+  pkill -x firefox 2>/dev/null || true
+  sleep 1
+}
+
+relaunch_firefox() {
+  resolve_console_user
+  if [ -n "$CONSOLE_USER" ]; then
+    launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
+      open -a Firefox >/dev/null 2>&1 || true
+    log "Firefox relaunched"
+  else
+    log "Firefox relaunch skipped (no GUI console user)"
   fi
 }
 
@@ -109,7 +278,7 @@ do_check() {
 }
 
 run_pass() {
-  PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0
+  PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; EXT_DRIFT_PROFILES=""
 
   found_ff=0
   for app in /Applications/Firefox.app /Users/*/Applications/Firefox.app; do
@@ -136,6 +305,8 @@ run_pass() {
     "$EXPECTED/extensions/page_keyword_filter.xpi" \
     "$BASE/extensions/page_keyword_filter.xpi" 0
 
+  check_extension_state
+
   if [ "$MODE" = check ]; then
     if [ -f "$PLIST" ]; then
       PASS=$((PASS+1)); echo "  [PASS] LaunchDaemon plist — $PLIST"
@@ -154,26 +325,43 @@ run_pass() {
   fi
 }
 
-maybe_restart() {
-  [ "$REPAIRED_MANAGED" = 1 ] || return
-  [ "$RESTART_FIREFOX_ON_REPAIR" = 1 ] || return
-  pgrep -x firefox >/dev/null 2>&1 || return
+# recovery: act on drift found by run_pass (daemon/repair modes only).
+# Extension drift is always enforced; managed-storage restart honours
+# RESTART_FIREFOX_ON_REPAIR. Firefox is only relaunched if it was running
+# when the pass started.
+recovery() {
+  was_running=0
+  firefox_running && was_running=1
+  killed=0
 
-  log "managed storage repaired while Firefox running — controlled restart"
-  user=""
-  uid="$(stat -f %u /dev/console 2>/dev/null || true)"
-  if [ -n "$uid" ] && [ "$uid" != 0 ]; then
-    user="$(id -nu "$uid" 2>/dev/null || true)"
-    if [ -n "$user" ]; then
-      launchctl asuser "$uid" sudo -u "$user" \
-        osascript -e 'tell application "Firefox" to quit' >/dev/null 2>&1 || true
-      sleep 5
+  if [ -n "$EXT_DRIFT_PROFILES" ]; then
+    if [ "$was_running" = 1 ]; then
+      log "extension drift — quitting Firefox for extensions.json repair"
+      quit_firefox
+      killed=1
     fi
+    while IFS= read -r prof; do
+      [ -n "$prof" ] || continue
+      repair_profile "$prof"
+    done <<< "$EXT_DRIFT_PROFILES"
   fi
-  pkill -x firefox 2>/dev/null || true
-  sleep 2
-  if [ -n "$user" ]; then
-    launchctl asuser "$uid" sudo -u "$user" open -a Firefox >/dev/null 2>&1 || true
+
+  want_managed_restart=0
+  [ "$REPAIRED_MANAGED" = 1 ] && [ "$RESTART_FIREFOX_ON_REPAIR" = 1 ] && want_managed_restart=1
+
+  if [ "$want_managed_restart" = 1 ] || [ "$killed" = 1 ]; then
+    if [ "$was_running" = 1 ]; then
+      if firefox_running; then
+        log "managed storage repaired while Firefox running — controlled restart"
+        quit_firefox
+        killed=1
+      fi
+      if ! firefox_running; then
+        relaunch_firefox
+      fi
+    else
+      log "drift repaired while Firefox not running — not launching it"
+    fi
   fi
 }
 
@@ -183,14 +371,14 @@ case "$MODE" in
     log "verifier started (pid $$, interval ${CHECK_INTERVAL}s)"
     while :; do
       run_pass
-      maybe_restart
+      recovery
       sleep "$CHECK_INTERVAL" &
       wait $!
     done
     ;;
   repair)
     run_pass
-    maybe_restart
+    recovery
     echo "repaired=$REPAIRED failed=$FAIL skipped=$SKIP passed=$PASS"
     [ "$FAIL" = 0 ]
     ;;
