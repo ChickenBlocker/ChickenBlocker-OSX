@@ -281,22 +281,46 @@ do_check() {
   fi
 }
 
+# check_firefox_profile: enforce the locally-installed configuration profile
+# (managed org.mozilla.firefox preferences). Replaces writing
+# distribution/policies.json into Firefox.app: App-Management TCC blocks
+# headless daemons from modifying app bundles, and every Firefox update wipes
+# the bundle copy. Profiles are installed/checked via the profiles(1) tool,
+# which needs no TCC consent.
+check_firefox_profile() {
+  if [ "$(id -u)" != 0 ]; then
+    SKIP=$((SKIP+1))
+    [ "$MODE" = check ] && echo "  [SKIP] firefox-profile — needs root (sudo)"
+    return
+  fi
+  if [ ! -f "$EXPECTED/org.mozilla.firefox.mobileconfig" ]; then
+    SKIP=$((SKIP+1))
+    [ "$MODE" = check ] && echo "  [SKIP] firefox-profile — expected file not present: $EXPECTED/org.mozilla.firefox.mobileconfig"
+    return
+  fi
+  if profiles show -type configuration 2>/dev/null | grep -q "com.chickenblocker.firefox"; then
+    PASS=$((PASS+1))
+    [ "$MODE" = check ] && echo "  [PASS] firefox-profile — org.mozilla.firefox managed preferences installed"
+    return
+  fi
+  if [ "$MODE" = check ]; then
+    FAIL=$((FAIL+1))
+    echo "  [FAIL] firefox-profile — configuration profile not installed"
+    return
+  fi
+  if profiles install -path "$EXPECTED/org.mozilla.firefox.mobileconfig" >/dev/null 2>&1; then
+    REPAIRED=$((REPAIRED+1))
+    log "REPAIRED firefox-profile (installed configuration profile)"
+  else
+    FAIL=$((FAIL+1))
+    log "REPAIR-FAILED firefox-profile (profiles install returned $?)"
+  fi
+}
+
 run_pass() {
   PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; EXT_DRIFT_PROFILES=""
 
-  found_ff=0
-  for app in /Applications/Firefox.app /Users/*/Applications/Firefox.app; do
-    [ -d "$app" ] || continue
-    found_ff=1
-    app_owner="$(stat -f '%Su:%Sg' "$app" 2>/dev/null || echo root:wheel)"
-    do_check "firefox-policies" \
-      "$EXPECTED/firefox-policies.json" \
-      "$app/Contents/Resources/distribution/policies.json" 0 "$app_owner"
-  done
-  if [ "$found_ff" = 0 ]; then
-    SKIP=$((SKIP+1))
-    [ "$MODE" = check ] && echo "  [SKIP] firefox-policies — Firefox.app not found"
-  fi
+  check_firefox_profile
 
   do_check "leechblock-managed-storage" \
     "$EXPECTED/leechblockng-managed-storage.json" \

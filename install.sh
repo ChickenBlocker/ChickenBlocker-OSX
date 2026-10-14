@@ -43,6 +43,24 @@ install_local() {
   install -m 0644 -o root -g wheel \
     "$REPO/config/firefox-policies.json" "$BASE/expected/firefox-policies.json"
 
+  echo ">> Generating + installing Firefox configuration profile"
+  command -v python3 >/dev/null 2>&1 || \
+    die "python3 is required on the Mac (install Xcode Command Line Tools)"
+  python3 "$REPO/tools/gen-firefox-profile.py" \
+    "$REPO/config/firefox-policies.json" \
+    "$BASE/expected/org.mozilla.firefox.mobileconfig"
+  chmod 0644 "$BASE/expected/org.mozilla.firefox.mobileconfig"
+  chown root:wheel "$BASE/expected/org.mozilla.firefox.mobileconfig"
+  profiles install -path "$BASE/expected/org.mozilla.firefox.mobileconfig" || \
+    die "profiles install failed"
+
+  echo ">> Removing legacy in-bundle policies.json (TCC-blocked channel)"
+  for app in /Applications/Firefox.app /Users/*/Applications/Firefox.app; do
+    [ -d "$app" ] || continue
+    rm -f "$app/Contents/Resources/distribution/policies.json"
+    rmdir "$app/Contents/Resources/distribution" 2>/dev/null || true
+  done
+
   echo ">> Installing LaunchDaemon $PLIST"
   install -m 0644 -o root -g wheel "$REPO/daemon/$LABEL.plist" "$PLIST"
 

@@ -26,7 +26,10 @@ uninstall_local() {
   launchctl bootout "system/$LABEL" 2>/dev/null || true
   rm -f "$PLIST"
 
-  echo ">> Removing Firefox policies"
+  echo ">> Removing Firefox configuration profile"
+  profiles remove -identifier com.chickenblocker.firefox 2>/dev/null || true
+
+  echo ">> Removing any in-bundle policies.json"
   for app in /Applications/Firefox.app /Users/*/Applications/Firefox.app; do
     [ -d "$app" ] || continue
     rm -f "$app/Contents/Resources/distribution/policies.json"
