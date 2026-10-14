@@ -298,12 +298,42 @@ do_check() {
   fi
 }
 
+# check_firefox_policy_channel: Firefox policies arrive via the
+# locally-installed configuration profile (com.chickenblocker.firefox,
+# managed org.mozilla.firefox preferences). A bare file dropped into
+# /Library/Managed Preferences is NOT honored by Firefox, and macOS 27 has
+# no CLI to (re)install profiles — so this is check-only: check mode
+# reports; daemon mode warns (rate-limited) when the profile is missing.
+check_firefox_policy_channel() {
+  if [ "$(id -u)" != 0 ]; then
+    SKIP=$((SKIP+1))
+    [ "$MODE" = check ] && echo "  [SKIP] firefox-profile — needs root (sudo)"
+    return
+  fi
+  if profiles show -type configuration 2>/dev/null | grep -q "com.chickenblocker.firefox"; then
+    PASS=$((PASS+1))
+    [ "$MODE" = check ] && echo "  [PASS] firefox-profile — configuration profile installed"
+    return
+  fi
+  if [ "$MODE" = check ]; then
+    FAIL=$((FAIL+1))
+    echo "  [FAIL] firefox-profile — not installed (System Settings: install $EXPECTED/org.mozilla.firefox.mobileconfig)"
+    return
+  fi
+  now="$(date +%s)"
+  last="$(cat "$BASE/.profile-warn-last" 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) now=0 ;; esac
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  if [ $((now - last)) -ge 3600 ]; then
+    echo "$now" > "$BASE/.profile-warn-last" 2>/dev/null || true
+    log "WARN firefox-profile missing — install $EXPECTED/org.mozilla.firefox.mobileconfig via System Settings"
+  fi
+}
+
 run_pass() {
   PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; EXT_DRIFT_PROFILES=""
 
-  do_check "firefox-managed-prefs" \
-    "$EXPECTED/org.mozilla.firefox.plist" \
-    "/Library/Managed Preferences/org.mozilla.firefox.plist" 0
+  check_firefox_policy_channel
 
   do_check "leechblock-managed-storage" \
     "$EXPECTED/leechblockng-managed-storage.json" \

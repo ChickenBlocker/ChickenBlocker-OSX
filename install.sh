@@ -63,13 +63,7 @@ install_local() {
                     "$BASE/expected/org.mozilla.firefox.mobileconfig"
   chmod 0644 "$BASE/expected/org.mozilla.firefox.plist" \
              "$BASE/expected/org.mozilla.firefox.mobileconfig"
-
-  echo ">> Installing managed preferences -> /Library/Managed Preferences/"
-  install -d -o root -g wheel -m 0755 "/Library/Managed Preferences"
-  install -m 0644 -o root -g wheel \
-    "$BASE/expected/org.mozilla.firefox.plist" \
-    "/Library/Managed Preferences/org.mozilla.firefox.plist"
-  killall cfprefsd 2>/dev/null || true
+  rm -f "/Library/Managed Preferences/org.mozilla.firefox.plist"
 
   echo ">> Removing legacy in-bundle policies.json (TCC-blocked channel)"
   for app in /Applications/Firefox.app /Users/*/Applications/Firefox.app; do
@@ -109,6 +103,14 @@ install_local() {
   bash "$BASE/verifier.sh" check || true
 
   echo
+  if profiles show -type configuration 2>/dev/null | grep -q "com.chickenblocker.firefox"; then
+    echo "Firefox configuration profile: installed"
+  else
+    echo "[!] Firefox policies need a ONE-TIME manual profile install on the Mac:"
+    echo "    Finder -> Cmd+Shift+G -> $BASE/expected"
+    echo "    double-click org.mozilla.firefox.mobileconfig -> Install (admin password),"
+    echo "    then restart Firefox (or: sudo launchctl kickstart -k system/$LABEL)"
+  fi
   fda="$(sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
     "SELECT auth_value FROM access WHERE service='kTCCServiceSystemPolicyAllFiles' AND client LIKE '%cb-bash';" 2>/dev/null || true)"
   if [ "$fda" = "2" ]; then
