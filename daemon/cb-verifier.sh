@@ -183,9 +183,9 @@ check_extension_state() {
   if [ "$found" = 0 ]; then
     SKIP=$((SKIP+1))
     if [ "$MODE" = check ]; then
-      echo "  [SKIP] extension-state — no Firefox profiles readable (grant Full Disk Access to /bin/bash)"
+      echo "  [SKIP] extension-state — no Firefox profiles readable (grant Full Disk Access to the verifier interpreter (BASE/bin/cb-bash))"
     else
-      log "EXTENSION-CHECK-ERROR no profile readable as root — grant Full Disk Access to /bin/bash"
+      log "EXTENSION-CHECK-ERROR no profile readable as root — grant Full Disk Access to the verifier interpreter (BASE/bin/cb-bash)"
     fi
   fi
 }

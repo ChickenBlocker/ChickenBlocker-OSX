@@ -34,6 +34,17 @@ install_local() {
   install -d -o root -g wheel -m 0755 \
     "$BASE" "$BASE/expected" "$BASE/expected/extensions" "$BASE/extensions"
   install -m 0755 -o root -g wheel "$REPO/daemon/cb-verifier.sh" "$BASE/verifier.sh"
+
+  echo ">> Building private interpreter $BASE/bin/cb-bash (FDA is granted to THIS binary only)"
+  install -d -o root -g wheel -m 0755 "$BASE/bin"
+  if [ ! -x "$BASE/bin/cb-bash" ] || ! cmp -s /bin/bash "$BASE/bin/cb-bash"; then
+    cp /bin/bash "$BASE/bin/cb-bash.new"
+    codesign --force --sign - "$BASE/bin/cb-bash.new" >/dev/null 2>&1 || \
+      die "codesign failed (Xcode Command Line Tools required)"
+    chmod 0755 "$BASE/bin/cb-bash.new"
+    chown root:wheel "$BASE/bin/cb-bash.new"
+    mv "$BASE/bin/cb-bash.new" "$BASE/bin/cb-bash"
+  fi
   if [ ! -f "$BASE/verifier.conf" ]; then
     printf 'CHECK_INTERVAL=15\nRESTART_FIREFOX_ON_REPAIR=1\nEXT_RESTART_MIN_INTERVAL=300\n' > "$BASE/verifier.conf"
     chown root:wheel "$BASE/verifier.conf"
@@ -99,14 +110,15 @@ install_local() {
 
   echo
   fda="$(sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
-    "SELECT auth_value FROM access WHERE service='kTCCServiceSystemPolicyAllFiles' AND client='com.apple.bash';" 2>/dev/null || true)"
+    "SELECT auth_value FROM access WHERE service='kTCCServiceSystemPolicyAllFiles' AND client LIKE '%cb-bash';" 2>/dev/null || true)"
   if [ "$fda" = "2" ]; then
-    echo "Full Disk Access for /bin/bash: granted"
+    echo "Full Disk Access for cb-bash: granted"
   else
-    echo "[!] For extension-state enforcement, grant Full Disk Access to /bin/bash:"
+    echo "[!] For extension-state enforcement, grant Full Disk Access to the verifier's"
+    echo "    private interpreter (NOT /bin/bash):"
     echo "    System Settings -> Privacy & Security -> Full Disk Access -> +"
-    echo "    (Cmd+Shift+G -> /bin/bash -> Open), then:"
-    echo "    sudo launchctl kickstart -k system/com.chickenblocker.verifier"
+    echo "    Cmd+Shift+G -> /Library/Application Support/ChickenBlocker/bin/cb-bash -> Open"
+    echo "    (ad-hoc signed copy; no other bash gets this grant)"
   fi
   echo
   echo "Done. Rules are pushed from the Linux machine:"
