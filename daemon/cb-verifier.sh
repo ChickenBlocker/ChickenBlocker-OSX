@@ -367,13 +367,16 @@ recovery() {
 
 case "$MODE" in
   daemon)
-    trap 'log "verifier stopped"; exit 0' INT TERM
+    sleep_pid=""
+    trap 'log "verifier stopped"; [ -n "$sleep_pid" ] && kill "$sleep_pid" 2>/dev/null; exit 0' INT TERM
     log "verifier started (pid $$, interval ${CHECK_INTERVAL}s)"
     while :; do
       run_pass
       recovery
       sleep "$CHECK_INTERVAL" &
+      sleep_pid=$!
       wait $!
+      sleep_pid=""
     done
     ;;
   repair)

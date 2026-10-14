@@ -48,7 +48,27 @@ install_local() {
 
   echo ">> Loading daemon"
   launchctl bootout "system/$LABEL" 2>/dev/null || true
-  launchctl bootstrap system "$PLIST"
+  # Wait until the label is really gone (bootout is asynchronous; the old
+  # job's processes may still be dying), then bootstrap with retries.
+  i=0
+  while [ "$i" -lt 10 ] && launchctl print "system/$LABEL" >/dev/null 2>&1; do
+    sleep 1
+    i=$((i+1))
+  done
+  loaded=""
+  for attempt in 1 2 3; do
+    if launchctl bootstrap system "$PLIST" 2>/dev/null; then
+      loaded=1
+      break
+    fi
+    sleep 2
+  done
+  if [ -z "$loaded" ]; then
+    launchctl load -w "$PLIST" 2>/dev/null || true
+  fi
+  sleep 1
+  launchctl print "system/$LABEL" >/dev/null 2>&1 || \
+    die "LaunchDaemon did not load (bootstrap EIO); check: sudo launchctl print system/$LABEL"
 
   echo ">> Initial audit"
   bash "$BASE/verifier.sh" check || true
