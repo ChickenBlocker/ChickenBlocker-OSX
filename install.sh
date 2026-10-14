@@ -46,10 +46,15 @@ install_local() {
     mv "$BASE/bin/cb-bash.new" "$BASE/bin/cb-bash"
   fi
   if [ ! -f "$BASE/verifier.conf" ]; then
-    printf 'CHECK_INTERVAL=15\nRESTART_FIREFOX_ON_REPAIR=1\nEXT_RESTART_MIN_INTERVAL=300\n' > "$BASE/verifier.conf"
+    printf 'CHECK_INTERVAL=15\nRESTART_FIREFOX_ON_REPAIR=1\nEXT_RESTART_MIN_INTERVAL=300\nSANTA_CHECKS=0\nSANTA_ENFORCE_SAFARI=0\nSANTA_LOCAL_RULE_FALLBACK=1\nSANTA_REINSTALL=0\n' > "$BASE/verifier.conf"
     chown root:wheel "$BASE/verifier.conf"
     chmod 0644 "$BASE/verifier.conf"
     echo ">> Wrote default $BASE/verifier.conf (preserved on reinstall)"
+  else
+    for setting in SANTA_CHECKS=0 SANTA_ENFORCE_SAFARI=0 SANTA_LOCAL_RULE_FALLBACK=1 SANTA_REINSTALL=0; do
+      key="${setting%%=*}"
+      grep -q "^$key=" "$BASE/verifier.conf" || printf '%s\n' "$setting" >> "$BASE/verifier.conf"
+    done
   fi
   install -m 0644 -o root -g wheel \
     "$REPO/config/firefox-policies.json" "$BASE/expected/firefox-policies.json"

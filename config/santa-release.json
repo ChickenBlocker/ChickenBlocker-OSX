@@ -1,0 +1,12 @@
+{
+  "version": "2026.8",
+  "receipt_version": "2026.8.244",
+  "release_url": "https://github.com/northpolesec/santa/releases/tag/2026.8",
+  "pkg_filename": "santa-2026.8.pkg",
+  "pkg_url": "https://github.com/northpolesec/santa/releases/download/2026.8/santa-2026.8.pkg",
+  "pkg_sha256": "0aaa970c7ddc63fe6a55c3144c825acb7f6bfa9cb15bcba1bffcaf2b5efc952a",
+  "team_id": "ZMCG7MLDV9",
+  "receipt_id": "com.northpolesec.santa",
+  "system_extension_id": "com.northpolesec.santa.daemon",
+  "vendor_uninstall_url": "https://raw.githubusercontent.com/northpolesec/santa/2026.8/Conf/uninstall.sh"
+}

@@ -29,9 +29,9 @@
 #         Extension enforcement is NOT governed by this flag (it is the core
 #         enforcement, mirroring Linux).
 #
-# Security posture: root can stop this daemon and edit ordinary files. It is
-# the verifier/friction layer of the local track, not a root-resistant
-# boundary; native binary denial is a later phase.
+# Phase 2 optionally audits Santa and its explicit Safari SigningID rule. Santa
+# remains in Monitor mode; the rule is the execution boundary. This is still a
+# local friction layer because an administrator can remove a local profile.
 set -u
 
 BASE="/Library/Application Support/ChickenBlocker"
@@ -42,6 +42,11 @@ PLIST="/Library/LaunchDaemons/com.chickenblocker.verifier.plist"
 CHECK_INTERVAL=15
 RESTART_FIREFOX_ON_REPAIR=1
 EXT_RESTART_MIN_INTERVAL=300
+SANTA_CHECKS=0
+SANTA_ENFORCE_SAFARI=0
+SANTA_LOCAL_RULE_FALLBACK=1
+SANTA_REINSTALL=0
+SANTA_REPAIR_MIN_INTERVAL=60
 [ -r "$CONF" ] && . "$CONF"
 
 LB_ID="leechblockng@proginosko.com"
@@ -63,6 +68,17 @@ REPAIRED_RESTART=0
 EXT_DRIFT_PROFILES=""
 CONSOLE_USER=""
 CONSOLE_UID=""
+SANTA_PROFILE_STATE="unchecked"
+SANTA_STATIC_COUNT=""
+SANTA_HEALTHY=0
+SAFARI_EXE=""
+SAFARI_PIDS=""
+SAFARI_SIGNING_ID="platform:com.apple.Safari"
+SANTA_VERSION="2026.8"
+SANTA_RECEIPT_VERSION="2026.8.244"
+SANTA_TEAM_ID="ZMCG7MLDV9"
+SANTA_RECEIPT_ID="com.northpolesec.santa"
+SANTA_EXTENSION_ID="com.northpolesec.santa.daemon"
 
 log() {
   printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOGFILE" 2>/dev/null || true
@@ -72,6 +88,307 @@ log() {
       tail -n 400 "$LOGFILE" > "$LOGFILE.cbtmp" 2>/dev/null && mv "$LOGFILE.cbtmp" "$LOGFILE"
     fi
   fi
+}
+
+audit_pass() {
+  PASS=$((PASS+1))
+  [ "$MODE" = check ] && echo "  [PASS] $1 — $2"
+}
+
+audit_skip() {
+  SKIP=$((SKIP+1))
+  [ "$MODE" = check ] && echo "  [SKIP] $1 — $2"
+}
+
+warn_limited() {
+  label="$1"
+  message="$2"
+  stamp="$BASE/.${label}-warn-last"
+  now="$(date +%s)"
+  last="$(cat "$stamp" 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) now=0 ;; esac
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  if [ $((now - last)) -ge 3600 ]; then
+    echo "$now" > "$stamp" 2>/dev/null || true
+    log "WARN $label: $message"
+  fi
+}
+
+audit_fail() {
+  FAIL=$((FAIL+1))
+  if [ "$MODE" = check ]; then
+    echo "  [FAIL] $1 — $2"
+  else
+    warn_limited "$1" "$2"
+  fi
+}
+
+santactl_path() {
+  command -v santactl 2>/dev/null || {
+    [ -x /usr/local/bin/santactl ] && printf '%s\n' /usr/local/bin/santactl && return
+    [ -x /Applications/Santa.app/Contents/MacOS/santactl ] && \
+      printf '%s\n' /Applications/Santa.app/Contents/MacOS/santactl
+  }
+  return 0
+}
+
+safari_executable() {
+  app="$(mdfind "kMDItemCFBundleIdentifier == 'com.apple.Safari'" 2>/dev/null | while IFS= read -r candidate; do
+    [ -d "$candidate" ] && { printf '%s\n' "$candidate"; break; }
+  done)"
+  [ -n "$app" ] || app="/Applications/Safari.app"
+  [ -d "$app" ] || return 1
+  executable="$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist" 2>/dev/null || true)"
+  [ -n "$executable" ] || return 1
+  [ -f "$app/Contents/MacOS/$executable" ] || return 1
+  printf '%s\n' "$app/Contents/MacOS/$executable"
+}
+
+profile_state() {
+  canonical="$1"
+  python3 - "$canonical" <<'PY'
+import os
+import plistlib
+import sys
+
+canonical_path = sys.argv[1]
+managed_path = "/Library/Managed Preferences/com.northpolesec.santa.plist"
+try:
+    with open(canonical_path, "rb") as handle:
+        expected_profile = plistlib.load(handle)
+    expected = expected_profile["PayloadContent"][0]
+except Exception as error:
+    print("canonical-error:" + str(error))
+    raise SystemExit(0)
+
+if not os.path.exists(managed_path):
+    print("absent")
+    raise SystemExit(0)
+try:
+    with open(managed_path, "rb") as handle:
+        installed = plistlib.load(handle)
+except Exception:
+    print("unreadable")
+    raise SystemExit(0)
+
+keys = (
+    "ClientMode", "EnableNotificationSilences", "EnableSilentMode",
+    "EnableSilentTTYMode", "StaticRules")
+expected_subset = {key: expected.get(key) for key in keys}
+installed_subset = {key: installed.get(key) for key in keys}
+allowed_keys = set(keys) | {"PayloadUUID", "_manualProfile"}
+if (installed_subset == expected_subset and
+        installed.get("PayloadUUID") == expected.get("PayloadUUID") and
+        set(installed).issubset(allowed_keys)):
+    print("ok")
+    raise SystemExit(0)
+print("mismatch")
+PY
+}
+
+pid_executable() {
+  pid="$1"
+  path="$(ps -p "$pid" -o comm= 2>/dev/null | sed 's/^[[:space:]]*//')"
+  if [ ! -f "$path" ] && command -v lsof >/dev/null 2>&1; then
+    path="$(lsof -a -p "$pid" -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p')"
+  fi
+  [ -f "$path" ] || return 1
+  printf '%s\n' "$path"
+}
+
+check_santa() {
+  if [ "$SANTA_CHECKS" != 1 ]; then
+    audit_skip "santa-checks" "disabled in verifier.conf until Santa activation is complete"
+    return
+  fi
+  if [ "$(id -u)" != 0 ]; then
+    audit_skip "santa-checks" "needs root (sudo)"
+    return
+  fi
+
+  SANTA_HEALTHY=1
+  info="$(pkgutil --pkg-info "$SANTA_RECEIPT_ID" 2>/dev/null || true)"
+  receipt_version="$(printf '%s\n' "$info" | sed -n 's/^version: //p')"
+  if [ "$receipt_version" = "$SANTA_RECEIPT_VERSION" ]; then
+    audit_pass "santa-package" "receipt $SANTA_RECEIPT_ID version $receipt_version"
+  else
+    audit_fail "santa-package" "expected receipt version $SANTA_RECEIPT_VERSION, found ${receipt_version:-none}; automatic reinstall is disabled"
+    SANTA_HEALTHY=0
+  fi
+
+  signature="$(codesign -dv --verbose=4 /Applications/Santa.app 2>&1 || true)"
+  if codesign --verify --deep --strict /Applications/Santa.app >/dev/null 2>&1 &&
+     printf '%s\n' "$signature" | grep -q "^TeamIdentifier=$SANTA_TEAM_ID$"; then
+    audit_pass "santa-signature" "Santa.app Team ID $SANTA_TEAM_ID"
+  else
+    audit_fail "santa-signature" "Santa.app is absent or not signed by Team ID $SANTA_TEAM_ID"
+    SANTA_HEALTHY=0
+  fi
+
+  extension_state="$(systemextensionsctl list com.apple.system_extension.endpoint_security 2>&1 || true)"
+  if printf '%s\n' "$extension_state" | grep -F "$SANTA_EXTENSION_ID" | grep -Fq '[activated enabled]'; then
+    audit_pass "santa-system-extension" "$SANTA_EXTENSION_ID is activated enabled"
+  else
+    audit_fail "santa-system-extension" "$SANTA_EXTENSION_ID is not activated enabled"
+    SANTA_HEALTHY=0
+  fi
+
+  SANTACTL="$(santactl_path)"
+  status_json=""
+  doctor=""
+  if [ -n "$SANTACTL" ]; then
+    status_json="$("$SANTACTL" status --json 2>/dev/null || true)"
+  fi
+  doctor="$("$SANTACTL" doctor 2>&1 || true)"
+  doctor_failure="$(printf '%s\n' "$doctor" | grep -F -m1 '[-]' || true)"
+  if [ -n "$status_json" ] && [ -z "$doctor_failure" ]; then
+    audit_pass "santa-fda" "daemon communication succeeded and santactl doctor reported no failed checks"
+  else
+    detail="$(printf '%s\n' "${doctor:-santactl status could not communicate with the daemon}" | grep -i -m1 -E 'Full Disk Access|\[-\]' || true)"
+    audit_fail "santa-fda" "${detail:-santactl status/doctor failed; verify Full Disk Access}"
+    SANTA_HEALTHY=0
+  fi
+
+  mode="$(printf '%s' "$status_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("daemon",{}).get("mode",""))' 2>/dev/null || true)"
+  SANTA_STATIC_COUNT="$(printf '%s' "$status_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("daemon",{}).get("static_rules",""))' 2>/dev/null || true)"
+  if [ "$mode" = Monitor ]; then
+    audit_pass "santa-mode" "Monitor"
+  else
+    audit_fail "santa-mode" "expected Monitor, found ${mode:-unknown}; verifier will never change client mode"
+    SANTA_HEALTHY=0
+  fi
+
+  SAFARI_EXE="$(safari_executable 2>/dev/null || true)"
+  signing_id=""
+  if [ -n "$SAFARI_EXE" ] && [ -n "$SANTACTL" ]; then
+    signing_id="$("$SANTACTL" fileinfo --key 'Signing ID' "$SAFARI_EXE" 2>/dev/null || true)"
+  fi
+  if [ "$signing_id" = "$SAFARI_SIGNING_ID" ]; then
+    audit_pass "santa-safari-identity" "$SAFARI_EXE resolves to $signing_id"
+  else
+    audit_fail "santa-safari-identity" "expected $SAFARI_SIGNING_ID, found ${signing_id:-no live Safari identity}"
+    SANTA_HEALTHY=0
+  fi
+
+  if [ "$SANTA_ENFORCE_SAFARI" != 1 ]; then
+    audit_skip "santa-profile" "Safari enforcement rollout gate is disabled"
+    audit_skip "santa-safari-rule" "Safari enforcement rollout gate is disabled"
+    audit_skip "safari-process" "Safari enforcement rollout gate is disabled"
+    return
+  fi
+
+  canonical="$EXPECTED/com.chickenblocker.santa.mobileconfig"
+  if [ ! -f "$canonical" ]; then
+    SANTA_PROFILE_STATE="canonical-missing"
+    audit_fail "santa-profile" "canonical production profile is missing: $canonical"
+  elif ! command -v python3 >/dev/null 2>&1; then
+    SANTA_PROFILE_STATE="unreadable"
+    audit_fail "santa-profile" "python3 is required to compare the installed profile"
+  else
+    SANTA_PROFILE_STATE="$(profile_state "$canonical")"
+    expected_count="$(python3 -c 'import plistlib,sys; print(len(plistlib.load(open(sys.argv[1],"rb"))["PayloadContent"][0]["StaticRules"]))' "$canonical" 2>/dev/null || true)"
+    if [ "$SANTA_PROFILE_STATE" = ok ] && [ "$SANTA_STATIC_COUNT" = "$expected_count" ]; then
+      audit_pass "santa-profile" "canonical system profile is installed with $expected_count effective static rule(s)"
+    elif [ "$SANTA_PROFILE_STATE" = absent ]; then
+      audit_fail "santa-profile" "profile is absent; local rule fallback is temporary only"
+    else
+      audit_fail "santa-profile" "installed/effective StaticRules differ from the canonical profile ($SANTA_PROFILE_STATE, count=${SANTA_STATIC_COUNT:-unknown})"
+    fi
+  fi
+
+  rule=""
+  if [ -n "$SAFARI_EXE" ] && [ -n "$SANTACTL" ]; then
+    rule="$("$SANTACTL" fileinfo --key Rule "$SAFARI_EXE" 2>/dev/null || true)"
+  fi
+  case "$rule" in
+    "Blocked (SigningID"*) audit_pass "santa-safari-rule" "$rule" ;;
+    *) audit_fail "santa-safari-rule" "live Safari executable is not blocked by a SigningID rule (${rule:-no decision})" ;;
+  esac
+
+  SAFARI_PIDS="$(pgrep -x Safari 2>/dev/null || true)"
+  if [ -z "$SAFARI_PIDS" ]; then
+    audit_pass "safari-process" "no main Safari process is running"
+  else
+    audit_fail "safari-process" "main Safari PID(s) running: $(printf '%s' "$SAFARI_PIDS" | tr '\n' ' ')"
+  fi
+}
+
+repair_santa_fallback() {
+  [ "$SANTA_CHECKS" = 1 ] && [ "$SANTA_ENFORCE_SAFARI" = 1 ] || return
+  [ "$SANTA_LOCAL_RULE_FALLBACK" = 1 ] || return
+  [ "$SANTA_HEALTHY" = 1 ] || return
+  [ "$SANTA_PROFILE_STATE" = absent ] || return
+  [ "$SANTA_STATIC_COUNT" = 0 ] || {
+    warn_limited "santa-profile" "static rules are active without the canonical profile; refusing local database changes"
+    return
+  }
+  [ -n "${SANTACTL:-}" ] && [ -n "$SAFARI_EXE" ] || return
+  current="$("$SANTACTL" fileinfo --key Rule "$SAFARI_EXE" 2>/dev/null || true)"
+  case "$current" in "Blocked (SigningID"*) return ;; esac
+
+  now="$(date +%s)"
+  last="$(cat "$BASE/.santa-repair-last" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  if [ $((now - last)) -lt "$SANTA_REPAIR_MIN_INTERVAL" ]; then return; fi
+  echo "$now" > "$BASE/.santa-repair-last" 2>/dev/null || true
+  if "$SANTACTL" rule --block --signingid --identifier "$SAFARI_SIGNING_ID" \
+      --message "Safari is disabled by ChickenBlocker. Use managed Firefox." >/dev/null 2>&1; then
+    REPAIRED=$((REPAIRED+1))
+    log "REPAIRED santa-safari-rule: added temporary local SigningID fallback"
+  else
+    FAIL=$((FAIL+1))
+    log "REPAIR-FAILED santa-safari-rule: local rule management unavailable; reinstall the canonical profile manually"
+  fi
+}
+
+terminate_verified_safari() {
+  [ "$SANTA_CHECKS" = 1 ] && [ "$SANTA_ENFORCE_SAFARI" = 1 ] || return
+  [ -n "$SAFARI_PIDS" ] && [ -n "${SANTACTL:-}" ] || return
+  verified=""
+  for pid in $SAFARI_PIDS; do
+    path="$(pid_executable "$pid" 2>/dev/null || true)"
+    identity=""
+    [ -n "$path" ] && identity="$("$SANTACTL" fileinfo --key 'Signing ID' "$path" 2>/dev/null || true)"
+    if [ "$identity" = "$SAFARI_SIGNING_ID" ]; then
+      verified="$verified $pid"
+    else
+      warn_limited "safari-process" "refusing to terminate PID $pid because its executable identity is ${identity:-unresolved}"
+    fi
+  done
+  [ -n "$verified" ] || return
+
+  now="$(date +%s)"
+  last="$(cat "$BASE/.safari-repair-last" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  if [ $((now - last)) -lt "$SANTA_REPAIR_MIN_INTERVAL" ]; then return; fi
+  echo "$now" > "$BASE/.safari-repair-last" 2>/dev/null || true
+
+  for pid in $verified; do
+    kill -0 "$pid" 2>/dev/null || continue
+    osascript -l JavaScript -e \
+      "ObjC.import('AppKit'); var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier($pid); if (app) { app.terminate; }" \
+      >/dev/null 2>&1 || true
+  done
+  sleep 3
+  for pid in $verified; do
+    kill -0 "$pid" 2>/dev/null || continue
+    path="$(pid_executable "$pid" 2>/dev/null || true)"
+    identity=""
+    [ -n "$path" ] && identity="$("$SANTACTL" fileinfo --key 'Signing ID' "$path" 2>/dev/null || true)"
+    [ "$identity" = "$SAFARI_SIGNING_ID" ] || continue
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  sleep 2
+  for pid in $verified; do
+    kill -0 "$pid" 2>/dev/null || continue
+    path="$(pid_executable "$pid" 2>/dev/null || true)"
+    identity=""
+    [ -n "$path" ] && identity="$("$SANTACTL" fileinfo --key 'Signing ID' "$path" 2>/dev/null || true)"
+    [ "$identity" = "$SAFARI_SIGNING_ID" ] || continue
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  REPAIRED=$((REPAIRED+1))
+  log "REPAIRED safari-process: quit identity-verified main Safari process(es)"
 }
 
 ext_py() {
@@ -380,6 +697,7 @@ check_firefox_policy_channel() {
 
 run_pass() {
   PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; REPAIRED_RESTART=0; EXT_DRIFT_PROFILES=""
+  SANTA_PROFILE_STATE="unchecked"; SANTA_STATIC_COUNT=""; SANTA_HEALTHY=0; SAFARI_EXE=""; SAFARI_PIDS=""
 
   check_firefox_policy_channel
 
@@ -401,6 +719,7 @@ run_pass() {
 
   check_extension_state
   check_profile_stylesheets
+  check_santa
 
   if [ "$MODE" = check ]; then
     if [ -f "$PLIST" ]; then
@@ -433,6 +752,9 @@ recovery() {
   if [ "$REPAIRED" -gt 0 ]; then
     killall cfprefsd 2>/dev/null || true
   fi
+
+  repair_santa_fallback
+  terminate_verified_safari
 
   if [ -n "$EXT_DRIFT_PROFILES" ]; then
     if [ "$was_running" != 1 ]; then

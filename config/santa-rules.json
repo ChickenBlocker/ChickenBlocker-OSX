@@ -1,0 +1,12 @@
+{
+  "rules": [
+    {
+      "name": "Safari",
+      "rule_type": "SIGNINGID",
+      "identifier": "platform:com.apple.Safari",
+      "policy": "BLOCKLIST",
+      "custom_msg": "Safari is disabled by ChickenBlocker. Use managed Firefox.",
+      "enabled": true
+    }
+  ]
+}

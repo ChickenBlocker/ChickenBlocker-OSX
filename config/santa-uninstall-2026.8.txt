@@ -1,0 +1,23 @@
+Pinned vendor uninstall reference for North Pole Security Santa 2026.8
+======================================================================
+
+Source reviewed 2026-10-14:
+https://raw.githubusercontent.com/northpolesec/santa/2026.8/Conf/uninstall.sh
+
+This is reference material, not a ChickenBlocker command. Do not execute it as
+part of normal rollback. First disable SANTA_CHECKS and SANTA_ENFORCE_SAFARI,
+then remove or replace the ChickenBlocker Santa configuration profile. Prefer
+rule-only rollback, which leaves Santa installed in Monitor mode.
+
+The pinned vendor procedure performs these operations as root:
+
+1. Requests system-extension unload through Santa.app and waits up to 60 seconds.
+2. Removes Santa bundle, metric, sync, and GUI launchd services.
+3. Signals syslogd to reload configuration.
+4. Removes `/Applications/Santa.app`, Santa LaunchAgents/LaunchDaemons, legacy Google Santa launchd files, log configuration, the `santactl` symlink, and zsh completion.
+5. Forgets package receipt `com.northpolesec.santa`.
+6. Deliberately leaves `/var/db/santa` and Santa logs/configuration in place; the vendor script contains commented removal commands for those paths.
+
+The vendor procedure does not require disabling SIP, enabling system-extension
+developer mode, running `systemextensionsctl reset`, or deleting
+`/var/db/santa`. Do not add those actions.
