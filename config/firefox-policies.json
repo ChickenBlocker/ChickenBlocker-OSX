@@ -1,0 +1,26 @@
+{
+ "policies": {
+    "BlockAboutAddons": true,
+    "BlockAboutProfiles": true,
+    "DisablePrivateBrowsing": true,
+    "DisableDeveloperTools": true,
+    "ExtensionUpdate": false,
+    "ExtensionSettings": {
+      "leechblockng@proginosko.com": {
+        "installation_mode": "force_installed",
+        "install_url": "https://addons.mozilla.org/firefox/downloads/latest/leechblock-ng/latest.xpi"
+      },
+      "page-keyword-filter-7f3a@local.addons": {
+        "installation_mode": "force_installed",
+        "install_url": "file:///Library/Application%20Support/ChickenBlocker/extensions/page_keyword_filter.xpi"
+      }
+    },
+    "Extensions": {
+      "Locked": [
+        "leechblockng@proginosko.com",
+        "page-keyword-filter-7f3a@local.addons",
+        "jid0-bnmfwWw2w2w4e4edvcdDbnMhdVg@jetpack"
+      ]
+    }
+ }
+}

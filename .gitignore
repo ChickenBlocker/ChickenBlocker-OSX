@@ -1,0 +1,5 @@
+# staged rule snapshots (live keyword words / LeechBlock settings) — never commit
+/staged/
+*.log
+.DS_Store
+__pycache__/
