@@ -108,7 +108,9 @@ install_local() {
   else
     echo "[!] Firefox policies need a ONE-TIME manual profile install on the Mac:"
     echo "    Finder -> Cmd+Shift+G -> $BASE/expected"
-    echo "    double-click org.mozilla.firefox.mobileconfig -> Install (admin password),"
+    echo "    double-click org.mozilla.firefox.mobileconfig (stages it), then"
+    echo "    System Settings -> General -> Device Management -> double-click the"
+    echo "    downloaded profile -> Install -> Install (admin password),"
     echo "    then restart Firefox (or: sudo launchctl kickstart -k system/$LABEL)"
   fi
   fda="$(sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \

@@ -1,40 +1,39 @@
 # ChickenBlocker-OSX
 
 macOS counterpart of [ChickenBlocker](../ChickenBlocker) (Linux), phase 1:
-a root **LaunchDaemon that checks and re-asserts the Firefox policy files and
-the LeechBlock / Page Keyword Filter blocking rules**, plus tooling that
+a root **LaunchDaemon that checks and re-asserts the Firefox policy channel
+and the LeechBlock / Page Keyword Filter blocking rules**, plus tooling that
 syncs those rules from the Linux ChickenBlocker machine. It corresponds to
 the verifier/policy layers of the macOS plan (`../ChickenBlocker/.kilo/plans/osx_version.md`,
 sections 5, 7 and the local track in section 8); see
 `../ChickenBlocker/.kilo/plans/osx_phase1.md` for the implemented/remaining
-breakdown.
+breakdown and the macOS 27 findings (TCC, profiles, channels).
 
 ## What it enforces
 
-| Expected (canonical) file                                    | Live target on the Mac |
-| ------------------------------------------------------------ | ---------------------- |
-| `config/firefox-policies.json` (installed to `BASE/expected/firefox-policies.json`) | `<Firefox.app>/Contents/Resources/distribution/policies.json` |
-| pushed `leechblockng-managed-storage.json`                   | `/Library/Application Support/Mozilla/ManagedStorage/leechblockng@proginosko.com.json` |
-| pushed `pkf-managed-storage.json`                            | `/Library/Application Support/Mozilla/ManagedStorage/page-keyword-filter-7f3a@local.addons.json` |
-| pushed `extensions/page_keyword_filter.xpi`                  | `BASE/extensions/page_keyword_filter.xpi` |
+| Channel                                                       | Live target on the Mac |
+| ------------------------------------------------------------- | ---------------------- |
+| Firefox policies — configuration profile `com.chickenblocker.firefox` (managed `org.mozilla.firefox` preferences) | System profile; verifier checks presence every cycle |
+| LeechBlock settings — managed-storage manifest                | `/Library/Application Support/Mozilla/ManagedStorage/leechblockng@proginosko.com.json` |
+| PKF keyword list — managed-storage manifest                   | `/Library/Application Support/Mozilla/ManagedStorage/page-keyword-filter-7f3a@local.addons.json` |
+| PKF extension `.xpi` (signed copy pushed from Linux; space-free `file://` URL) | `/usr/local/lib/ChickenBlocker/page_keyword_filter.xpi` (+ legacy copy under `BASE/extensions/`) |
+| Extension state — LeechBlock/PKF present and active in every Firefox profile | `<profile>/extensions.json`, repaired in place + `addonStartup` cache drop + controlled Firefox restart |
 
 `BASE` is `/Library/Application Support/ChickenBlocker`.
 
 The Firefox policies block `about:addons`/`about:profiles`, private browsing
-and developer tools, force-install **LeechBlock NG** (from the anonymous AMO
-direct-download link — no account needed) and the **Page Keyword Filter**
-extension (from the local `file://` copy of the signed `.xpi` pushed from
-Linux — nothing is downloaded from AMO), and lock them against
-removal/disabling. The LeechBlock settings themselves arrive as a Firefox
-managed-storage manifest, snapshotted from the Linux machine's Firefox.
+and developer tools, force-install **LeechBlock NG** (anonymous AMO
+direct-download link — no account) and the **Page Keyword Filter** extension
+(local `file://` xpi — nothing is downloaded from AMO), and lock both against
+removal/disabling. The LeechBlock settings arrive as a managed-storage
+manifest, snapshotted from the Linux machine's Firefox.
 
-In addition (a port of the Linux ChickenBlocker daemon), every Firefox
-profile's `extensions.json` is checked each cycle: if the LeechBlock or PKF
-entry is `active: false` (or missing), Firefox is quit, the entry is
-re-enabled in place (`active=true`, `userDisabled=false`, preserving the
-file's owner/mode), the `addonStartup` cache is dropped, and Firefox is
-relaunched — but only if it was already running. This closes the
-disable-the-extension escape the file checks alone can't see.
+Extension-state enforcement is a port of the Linux ChickenBlocker daemon:
+if a profile's `extensions.json` shows LeechBlock or PKF disabled or
+missing, Firefox is quit, the entry is re-enabled in place, the startup
+cache is dropped, and Firefox is relaunched — but only if it was already
+running, and at most once per `EXT_RESTART_MIN_INTERVAL` (300 s) so a
+failing install cannot loop.
 
 ## Layout
 
@@ -43,28 +42,45 @@ ChickenBlocker-OSX/
   config/firefox-policies.json        canonical macOS Firefox policies
   daemon/cb-verifier.sh               check & repair service (bash)
   daemon/com.chickenblocker.verifier.plist
+  tools/gen-firefox-profile.py        generates the .mobileconfig (and plist)
   sync/extract_rules.py               Linux side: snapshot rules to staged/
   sync/sync-to-mac.sh                 Linux side: push staged/ to the Mac
   install.sh / uninstall.sh           local or over-SSH install (see below)
 ```
 
-## Install
+## Install (fresh Mac)
 
 ```sh
-# on the Mac:
-sudo ./install.sh
-
-# from the Linux machine, over SSH (SSH is used ONLY when a target is given):
+# 1. install daemon + files (from Linux: over SSH; SSH is used only when a
+#    target is given)
 ./install.sh user@mac-host
+
+# 2. on the Mac: grant Full Disk Access to the verifier's private interpreter
+#    (NOT /bin/bash):
+#    System Settings -> Privacy & Security -> Full Disk Access -> +
+#    Cmd+Shift+G -> /Library/Application Support/ChickenBlocker/bin/cb-bash
+ssh -t user@mac-host 'sudo launchctl kickstart -k system/com.chickenblocker.verifier'
+
+# 3. one-time Firefox profile install on the Mac (macOS 27 has no CLI for it):
+#    Finder -> Cmd+Shift+G -> /Library/Application Support/ChickenBlocker/expected
+#    double-click org.mozilla.firefox.mobileconfig, then
+#    System Settings -> General -> Device Management -> double-click the
+#    downloaded profile -> Install -> Install (admin password)
+
+# 4. push the rules from the Linux machine
+sync/sync-to-mac.sh user@mac-host
 ```
 
-Then push the actual rules from the Linux machine (see below). The install
-step alone already enforces the Firefox policies.
+Step 2 is required because macOS TCC blocks even root LaunchDaemons from
+reading browser profile data (`extensions.json`); the grant is scoped to the
+ad-hoc-signed `cb-bash` copy so no other shell gains anything. Step 3 is
+required because macOS 27 removed `profiles install`; the profile survives
+Firefox updates and only changes when `config/firefox-policies.json` does.
 
 ## Sync rules from the Linux machine
 
 Run on the Linux machine that has this repo checked out next to the
-`ChickenBlocker` repo:
+`ChickenBlocker` repo (or set `CB_LINUX_REPO`):
 
 ```sh
 sync/sync-to-mac.sh user@mac-host    # extract + push + repair + audit
@@ -72,10 +88,8 @@ sync/sync-to-mac.sh                  # extract only, into ./staged (gitignored)
 ```
 
 Extraction snapshots: LeechBlock settings (from Firefox's
-`storage-sync-v2.sqlite`), the live Page Keyword Filter keyword manifest, and
-the signed `.xpi`. Keyword words are printed as counts only and are never
-committed. After the push the verifier repairs the live files immediately and
-prints an audit. Re-run whenever rules change on Linux.
+`storage-sync-v2.sqlite`), the live PKF keyword manifest, and the signed
+`.xpi`. Keyword words are printed as counts only and are never committed.
 
 ## Verifier
 
@@ -85,32 +99,32 @@ sudo bash "$BASE/verifier.sh" repair   # one repair pass
 sudo bash "$BASE/verifier.sh" daemon   # loop (what the LaunchDaemon runs)
 ```
 
-Checks run every `CHECK_INTERVAL` seconds (default 15). Any missing,
-drifting, or mis-permissioned live file is reinstalled from the canonical
-copy and logged to `BASE/verifier.log`. When a managed-storage file had to be
-repaired while Firefox is running, Firefox is quit and relaunched so
-LeechBlock re-copies the managed configuration (disable via
-`RESTART_FIREFOX_ON_REPAIR=0` in `BASE/verifier.conf`).
+Checks run every `CHECK_INTERVAL` seconds (default 15). Missing, drifting,
+or mis-permissioned files are reinstalled from the canonical copies and
+logged to `BASE/verifier.log`. A missing configuration profile is warned
+about hourly (it cannot be reinstalled headless). Config:
+`BASE/verifier.conf` (`CHECK_INTERVAL`, `RESTART_FIREFOX_ON_REPAIR`,
+`EXT_RESTART_MIN_INTERVAL`).
 
 ## Uninstall
 
 ```sh
-sudo ./uninstall.sh          # on the Mac
+sudo ./uninstall.sh          # on the Mac (also removes the managed prefs file)
 ./uninstall.sh user@mac-host # from Linux over SSH
 ```
 
-Removes the daemon, all deployed files, and the Firefox `distribution`
-policies; restart Firefox afterwards.
+Also remove the profile manually (System Settings → General → Device
+Management → −) and the FDA grant if desired; restart Firefox afterwards.
 
 ## Security posture (phase 1, honest limits)
 
 - This is the **friction layer** of the local track: an unrestricted local
-  root session can `launchctl bootout` the daemon and edit ordinary files.
-  Drift is closed within seconds, but a minutes-long bypass window exists
+  root session can `launchctl bootout` the daemon, remove the profile via
+  System Settings, and edit ordinary files. Drift is closed within seconds
+  (profile loss: hourly warning), but a minutes-long bypass window exists
   under root — exactly as documented in the plan's section 8.
 - It is **not** the root-resistant execution boundary; native binary denial
   (MDM declarations or Santa) is a later phase and will make stopping this
   daemon irrelevant to browser enforcement.
-- Firefox re-reads `policies.json` at startup; the verifier repairs files
-  immediately, but an already-running Firefox picks changes up on next start
-  (or on the controlled restart above).
+- The FDA grant covers only `BASE/bin/cb-bash` (deterministic ad-hoc
+  signature; re-grant only if Apple updates `/bin/bash`).
