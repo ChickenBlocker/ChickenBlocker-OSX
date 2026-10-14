@@ -21,22 +21,30 @@ python3 "$REPO/sync/extract_rules.py" --out "$STAGED"
 cat > "$STAGED/sync-remote.sh" <<'EOF'
 #!/bin/bash
 set -eu
+cd "$(dirname "$0")"
 BASE="/Library/Application Support/ChickenBlocker"
 if [ ! -d "$BASE/expected" ]; then
   echo "ERROR: ChickenBlocker-OSX is not installed on this Mac (run install.sh first)" >&2
   exit 1
 fi
 install -d -o root -g wheel -m 0755 "$BASE/expected/extensions"
+found=0
 for f in leechblockng-managed-storage.json pkf-managed-storage.json; do
   if [ -f "$f" ]; then
     install -m 0644 -o root -g wheel "$f" "$BASE/expected/$f"
     echo "updated expected/$f"
+    found=1
   fi
 done
 if [ -f extensions/page_keyword_filter.xpi ]; then
   install -m 0644 -o root -g wheel extensions/page_keyword_filter.xpi \
     "$BASE/expected/extensions/page_keyword_filter.xpi"
   echo "updated expected/extensions/page_keyword_filter.xpi"
+  found=1
+fi
+if [ "$found" = 0 ]; then
+  echo "ERROR: no staged rule files found next to sync-remote.sh" >&2
+  exit 1
 fi
 echo ">> Applying (repair pass)"
 bash "$BASE/verifier.sh" repair
