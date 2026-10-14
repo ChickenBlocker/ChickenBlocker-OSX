@@ -27,7 +27,11 @@ and developer tools, force-install **LeechBlock NG** (anonymous AMO
 direct-download link — no account) and the **Page Keyword Filter** extension
 (local `file://` xpi — nothing is downloaded from AMO), and lock both against
 removal/disabling. The LeechBlock settings arrive as a managed-storage
-manifest, snapshotted from the Linux machine's Firefox.
+manifest, snapshotted from the Linux machine's Firefox. Rule content is copied,
+but every populated set is deliberately forced active seven days a week from
+`0000-2359`, with no time allowance or disabled flag. Thus the Mac blocks all
+sites/regex rules present in the Linux sets even when their Linux schedules or
+active toggles would currently allow access. Empty sets remain inactive.
 
 The profile uses Mozilla's required macOS format:
 `com.apple.ManagedClient.preferences`, `mcx_preference_settings`, and
@@ -109,7 +113,9 @@ sync/sync-to-mac.sh                  # extract only, into ./staged (gitignored)
 Extraction snapshots: LeechBlock settings (from Firefox's
 `storage-sync-v2.sqlite`), the live PKF keyword manifest, the signed `.xpi`,
 and the Linux repository's `userChrome.css`/`userContent.css`. Keyword words
-are printed as counts only and are never committed.
+are printed as counts only and are never committed. The LeechBlock snapshot
+normalizes every populated set to always-blocked before it is staged; sync is
+still an explicit push and does not continuously poll the Linux machine.
 
 ## Verifier
 

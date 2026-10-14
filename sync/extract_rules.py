@@ -6,7 +6,9 @@ Runs on the LINUX ChickenBlocker machine. Produces macOS-ready files:
   leechblockng-managed-storage.json
       Firefox managed-storage manifest for LeechBlock NG (>= 1.7.3): a
       snapshot of this machine's LeechBlock settings, read from Firefox's
-      storage-sync-v2.sqlite (ext_id leechblockng@proginosko.com).
+      storage-sync-v2.sqlite (ext_id leechblockng@proginosko.com). Every
+      populated set is forced active 24/7 with no time allowance, matching the
+      Linux Firefox-to-Vivaldi synchronization semantics.
   pkf-managed-storage.json
       The live Page Keyword Filter managed-storage manifest (title/body
       keyword list), copied verbatim.
@@ -37,6 +39,8 @@ import sys
 
 EXT = "leechblockng@proginosko.com"
 PKF_EXT_ID = "page-keyword-filter-7f3a@local.addons"
+NUM_SETS = 6
+ALL_DAYS = [True] * 7
 
 
 def die(msg):
@@ -134,6 +138,45 @@ def read_leechblock_settings(sqlite_path):
         die("LeechBlock settings are not valid JSON: %s" % e)
 
 
+def set_is_populated(settings, n):
+    sites = settings.get("sites%d" % n, "")
+    if not isinstance(sites, str):
+        sites = ""
+    return (bool(sites.strip()) or
+            bool(settings.get("keywordRE%d" % n)) or
+            bool(settings.get("regexpBlock%d" % n)))
+
+
+def force_populated_sets_always_blocked(settings):
+    """Return a Firefox config with every populated set blocking 24/7."""
+    out = dict(settings)
+    source_num_sets = settings.get("numSets", NUM_SETS)
+    try:
+        num_sets = int(source_num_sets)
+    except (TypeError, ValueError):
+        num_sets = NUM_SETS
+    num_sets = max(1, min(NUM_SETS, num_sets))
+
+    highest_populated = 0
+    for n in range(1, NUM_SETS + 1):
+        if not set_is_populated(settings, n):
+            out["activeBlock%d" % n] = False
+            continue
+        highest_populated = n
+        out["activeBlock%d" % n] = True
+        out["days%d" % n] = list(ALL_DAYS)
+        out["times%d" % n] = "0000-2359"
+        out["limitMins%d" % n] = ""
+        out["limitPeriod%d" % n] = ""
+        out["limitOffset%d" % n] = ""
+        out["disable%d" % n] = False
+
+    num_sets = max(num_sets, highest_populated)
+    out["numSets"] = (str(num_sets)
+                      if isinstance(source_num_sets, str) else num_sets)
+    return out
+
+
 def read_bytes(path):
     try:
         with open(path, "rb") as f:
@@ -206,7 +249,8 @@ def main():
     os.makedirs(os.path.join(out, "extensions"), exist_ok=True)
 
     sqlite_path = infer_sqlite_path(args.sqlite)
-    lb = read_leechblock_settings(sqlite_path)
+    lb = force_populated_sets_always_blocked(
+        read_leechblock_settings(sqlite_path))
     write_json(os.path.join(out, "leechblockng-managed-storage.json"), {
         "name": EXT,
         "description": "LeechBlock NG settings synced from the Linux "
@@ -238,10 +282,13 @@ def main():
         shutil.copyfile(src, os.path.join(out, name))
 
     kw5, kw6 = keyword_counts(lb)
+    populated = sum(1 for n in range(1, NUM_SETS + 1)
+                    if set_is_populated(lb, n))
     print("LeechBlock settings : %s" % sqlite_path)
-    print("  numSets=%s active=%d  set5 keywords=%d  set6 url-words=%d" % (
+    print("  numSets=%s populated/forced=%d  set5 keywords=%d  "
+          "set6 url-words=%d" % (
         lb.get("numSets", "?"),
-        sum(1 for n in range(1, 7) if lb.get("activeBlock%d" % n)),
+        populated,
         kw5, kw6))
     print("PKF manifest        : %s (keywords=%d)" % (pkf_path, pkf_kw))
     if xpi_path:
