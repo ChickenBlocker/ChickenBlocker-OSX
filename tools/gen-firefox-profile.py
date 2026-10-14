@@ -63,7 +63,10 @@ def main():
         ],
         "PayloadIdentifier": IDENTIFIER,
         "PayloadRemovalDisallowed": True,
-        "PayloadScope": "System",
+        # User scope: system-scoped managed-preferences payloads from manual
+        # profiles are not materialized into /Library/Managed Preferences on
+        # macOS 27 (verified on-target); user-scoped ones are.
+        "PayloadScope": "User",
         "PayloadType": "Configuration",
         "PayloadUUID": PROFILE_UUID,
         "PayloadVersion": 1,
