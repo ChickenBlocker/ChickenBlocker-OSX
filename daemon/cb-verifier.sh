@@ -45,7 +45,6 @@ RESTART_FIREFOX_ON_REPAIR=1
 LB_ID="leechblockng@proginosko.com"
 PKF_ID="page-keyword-filter-7f3a@local.addons"
 MS_DIR="/Library/Application Support/Mozilla/ManagedStorage"
-PROFILE_GLOB="/Users/*/Library/Application Support/Firefox/Profiles"
 
 MODE="${1:-daemon}"
 case "$MODE" in
@@ -144,7 +143,7 @@ check_extension_state() {
   fi
   ids="$(ext_ids)"
   found=0
-  for prof in "$PROFILE_GLOB"/*/; do
+  for prof in /Users/*/Library/Application\ Support/Firefox/Profiles/*/; do
     [ -f "$prof/extensions.json" ] || continue
     found=1
     name="$(basename "$prof")"
