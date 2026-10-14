@@ -43,16 +43,22 @@ install_local() {
   install -m 0644 -o root -g wheel \
     "$REPO/config/firefox-policies.json" "$BASE/expected/firefox-policies.json"
 
-  echo ">> Generating + installing Firefox configuration profile"
+  echo ">> Generating Firefox policy delivery files"
   command -v python3 >/dev/null 2>&1 || \
     die "python3 is required on the Mac (install Xcode Command Line Tools)"
   python3 "$REPO/tools/gen-firefox-profile.py" \
-    "$REPO/config/firefox-policies.json" \
-    "$BASE/expected/org.mozilla.firefox.mobileconfig"
-  chmod 0644 "$BASE/expected/org.mozilla.firefox.mobileconfig"
-  chown root:wheel "$BASE/expected/org.mozilla.firefox.mobileconfig"
-  profiles install -path "$BASE/expected/org.mozilla.firefox.mobileconfig" || \
-    die "profiles install failed"
+    "$REPO/config/firefox-policies.json" "$BASE/expected/"
+  chown root:wheel "$BASE/expected/org.mozilla.firefox.plist" \
+                    "$BASE/expected/org.mozilla.firefox.mobileconfig"
+  chmod 0644 "$BASE/expected/org.mozilla.firefox.plist" \
+             "$BASE/expected/org.mozilla.firefox.mobileconfig"
+
+  echo ">> Installing managed preferences -> /Library/Managed Preferences/"
+  install -d -o root -g wheel -m 0755 "/Library/Managed Preferences"
+  install -m 0644 -o root -g wheel \
+    "$BASE/expected/org.mozilla.firefox.plist" \
+    "/Library/Managed Preferences/org.mozilla.firefox.plist"
+  killall cfprefsd 2>/dev/null || true
 
   echo ">> Removing legacy in-bundle policies.json (TCC-blocked channel)"
   for app in /Applications/Firefox.app /Users/*/Applications/Firefox.app; do

@@ -281,46 +281,12 @@ do_check() {
   fi
 }
 
-# check_firefox_profile: enforce the locally-installed configuration profile
-# (managed org.mozilla.firefox preferences). Replaces writing
-# distribution/policies.json into Firefox.app: App-Management TCC blocks
-# headless daemons from modifying app bundles, and every Firefox update wipes
-# the bundle copy. Profiles are installed/checked via the profiles(1) tool,
-# which needs no TCC consent.
-check_firefox_profile() {
-  if [ "$(id -u)" != 0 ]; then
-    SKIP=$((SKIP+1))
-    [ "$MODE" = check ] && echo "  [SKIP] firefox-profile — needs root (sudo)"
-    return
-  fi
-  if [ ! -f "$EXPECTED/org.mozilla.firefox.mobileconfig" ]; then
-    SKIP=$((SKIP+1))
-    [ "$MODE" = check ] && echo "  [SKIP] firefox-profile — expected file not present: $EXPECTED/org.mozilla.firefox.mobileconfig"
-    return
-  fi
-  if profiles show -type configuration 2>/dev/null | grep -q "com.chickenblocker.firefox"; then
-    PASS=$((PASS+1))
-    [ "$MODE" = check ] && echo "  [PASS] firefox-profile — org.mozilla.firefox managed preferences installed"
-    return
-  fi
-  if [ "$MODE" = check ]; then
-    FAIL=$((FAIL+1))
-    echo "  [FAIL] firefox-profile — configuration profile not installed"
-    return
-  fi
-  if profiles install -path "$EXPECTED/org.mozilla.firefox.mobileconfig" >/dev/null 2>&1; then
-    REPAIRED=$((REPAIRED+1))
-    log "REPAIRED firefox-profile (installed configuration profile)"
-  else
-    FAIL=$((FAIL+1))
-    log "REPAIR-FAILED firefox-profile (profiles install returned $?)"
-  fi
-}
-
 run_pass() {
   PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; EXT_DRIFT_PROFILES=""
 
-  check_firefox_profile
+  do_check "firefox-managed-prefs" \
+    "$EXPECTED/org.mozilla.firefox.plist" \
+    "/Library/Managed Preferences/org.mozilla.firefox.plist" 0
 
   do_check "leechblock-managed-storage" \
     "$EXPECTED/leechblockng-managed-storage.json" \
@@ -366,6 +332,11 @@ recovery() {
   was_running=0
   firefox_running && was_running=1
   killed=0
+
+  # Flush preference caches so a repaired managed-prefs file is re-read.
+  if [ "$REPAIRED" -gt 0 ]; then
+    killall cfprefsd 2>/dev/null || true
+  fi
 
   if [ -n "$EXT_DRIFT_PROFILES" ]; then
     if [ "$was_running" != 1 ]; then

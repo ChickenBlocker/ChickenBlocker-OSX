@@ -26,7 +26,8 @@ uninstall_local() {
   launchctl bootout "system/$LABEL" 2>/dev/null || true
   rm -f "$PLIST"
 
-  echo ">> Removing Firefox configuration profile"
+  echo ">> Removing Firefox managed preferences"
+  rm -f "/Library/Managed Preferences/org.mozilla.firefox.plist"
   profiles remove -identifier com.chickenblocker.firefox 2>/dev/null || true
 
   echo ">> Removing any in-bundle policies.json"
