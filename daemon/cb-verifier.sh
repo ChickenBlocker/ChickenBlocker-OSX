@@ -148,7 +148,7 @@ check_extension_state() {
     [ -f "$prof/extensions.json" ] || continue
     found=1
     name="$(basename "$prof")"
-    out="$(ext_py | python3 - check "$prof" $ids 2>/dev/null)"
+    out="$(ext_py | python3 - check "$prof" $ids 2>"$BASE/.ext-err")"
     rc=$?
     if [ "$rc" = 0 ]; then
       PASS=$((PASS+1))
@@ -164,12 +164,20 @@ check_extension_state() {
       fi
     else
       SKIP=$((SKIP+1))
-      [ "$MODE" = check ] && echo "  [SKIP] extension-state[$name] — extensions.json unreadable"
+      if [ "$MODE" = check ]; then
+        echo "  [SKIP] extension-state[$name] — extensions.json unreadable"
+      else
+        log "EXTENSION-CHECK-ERROR $name rc=$rc: $(head -1 "$BASE/.ext-err" 2>/dev/null)"
+      fi
     fi
   done
   if [ "$found" = 0 ]; then
     SKIP=$((SKIP+1))
-    [ "$MODE" = check ] && echo "  [SKIP] extension-state — no Firefox profiles with extensions.json"
+    if [ "$MODE" = check ]; then
+      echo "  [SKIP] extension-state — no Firefox profiles with extensions.json"
+    else
+      log "EXTENSION-CHECK-ERROR no profile matched the glob or none has extensions.json"
+    fi
   fi
 }
 
@@ -388,6 +396,7 @@ case "$MODE" in
     sleep_pid=""
     trap 'log "verifier stopped"; [ -n "$sleep_pid" ] && kill "$sleep_pid" 2>/dev/null; exit 0' INT TERM
     log "verifier started (pid $$, interval ${CHECK_INTERVAL}s)"
+    log "diag: python3=$(command -v python3 2>/dev/null || echo MISSING) ids=[$(ext_ids 2>/dev/null)] profiles=$(ls -d /Users/*/Library/Application\ Support/Firefox/Profiles/*/ 2>/dev/null | wc -l | tr -d ' ')"
     while :; do
       run_pass
       recovery
