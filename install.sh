@@ -114,7 +114,7 @@ case "${1:-}" in
     [ "$(ssh -o BatchMode=yes "$TARGET" 'uname -s')" = Darwin ] || die "$TARGET is not a Mac"
     RT="/tmp/chickenblocker-osx-install"
     echo ">> Copying files"
-    tar -cf - -C "$REPO" README.md install.sh uninstall.sh config daemon | \
+    tar -cf - -C "$REPO" README.md install.sh uninstall.sh config daemon tools | \
       ssh "$TARGET" "rm -rf '$RT' && mkdir -p '$RT' && tar -C '$RT' -xf -"
     echo ">> Installing on $TARGET (sudo password may be asked)"
     ssh -t "$TARGET" "sudo bash '$RT/install.sh' --local; rc=\$?; rm -rf '$RT'; exit \$rc"
