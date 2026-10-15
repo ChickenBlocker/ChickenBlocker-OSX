@@ -42,20 +42,48 @@ class ForcePopulatedSetsTests(unittest.TestCase):
         self.assertEqual(result["unrelated"], {"keep": [1, 2, 3]})
         self.assertEqual(source, original)
 
-    def test_empty_set_is_inactive_without_rewriting_other_fields(self):
+    def test_empty_set_is_inactive_but_schedule_is_normalized(self):
         source = {
             "numSets": 1,
             "sites1": "  ",
             "activeBlock1": True,
             "times1": "1200-1300",
+            "days1": [False] * 7,
+            "limitMins1": "70",
+            "limitPeriod1": "86400",
+            "limitOffset1": "5",
             "disable1": True,
         }
 
         result = extract_rules.force_populated_sets_always_blocked(source)
 
         self.assertFalse(result["activeBlock1"])
-        self.assertEqual(result["times1"], "1200-1300")
-        self.assertTrue(result["disable1"])
+        self.assertEqual(result["days1"], [True] * 7)
+        self.assertEqual(result["times1"], "0000-2359")
+        self.assertEqual(result["limitMins1"], "")
+        self.assertEqual(result["limitPeriod1"], "")
+        self.assertEqual(result["limitOffset1"], "")
+        self.assertFalse(result["disable1"])
+
+    def test_firefox_sync_is_disabled_like_vivaldi(self):
+        source = {"sync": True, "autoExportSync": True}
+
+        result = extract_rules.force_populated_sets_always_blocked(source)
+
+        self.assertFalse(result["sync"])
+        self.assertFalse(result["autoExportSync"])
+
+    def test_all_six_set_schedules_are_overwritten(self):
+        result = extract_rules.force_populated_sets_always_blocked({})
+
+        for n in range(1, 7):
+            self.assertFalse(result["activeBlock%d" % n])
+            self.assertEqual(result["days%d" % n], [True] * 7)
+            self.assertEqual(result["times%d" % n], "0000-2359")
+            self.assertEqual(result["limitMins%d" % n], "")
+            self.assertEqual(result["limitPeriod%d" % n], "")
+            self.assertEqual(result["limitOffset%d" % n], "")
+            self.assertFalse(result["disable%d" % n])
 
     def test_regexp_only_set_is_populated_and_raises_numsets(self):
         source = {

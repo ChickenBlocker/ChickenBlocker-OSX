@@ -150,6 +150,10 @@ def set_is_populated(settings, n):
 def force_populated_sets_always_blocked(settings):
     """Return a Firefox config with every populated set blocking 24/7."""
     out = dict(settings)
+    # Match cb_vv_leechblock.py: keep this machine on local extension storage
+    # so Firefox Sync cannot restore the Linux schedules after import.
+    out["sync"] = False
+    out["autoExportSync"] = False
     source_num_sets = settings.get("numSets", NUM_SETS)
     try:
         num_sets = int(source_num_sets)
@@ -159,11 +163,10 @@ def force_populated_sets_always_blocked(settings):
 
     highest_populated = 0
     for n in range(1, NUM_SETS + 1):
-        if not set_is_populated(settings, n):
-            out["activeBlock%d" % n] = False
-            continue
-        highest_populated = n
-        out["activeBlock%d" % n] = True
+        populated = set_is_populated(settings, n)
+        if populated:
+            highest_populated = n
+        out["activeBlock%d" % n] = populated
         out["days%d" % n] = list(ALL_DAYS)
         out["times%d" % n] = "0000-2359"
         out["limitMins%d" % n] = ""

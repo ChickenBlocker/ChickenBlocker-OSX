@@ -38,7 +38,10 @@ manifest, snapshotted from the Linux machine's Firefox. Rule content is copied,
 but every populated set is deliberately forced active seven days a week from
 `0000-2359`, with no time allowance or disabled flag. Thus the Mac blocks all
 sites/regex rules present in the Linux sets even when their Linux schedules or
-active toggles would currently allow access. Empty sets remain inactive.
+active toggles would currently allow access. As in the Vivaldi sync, all six
+sets have their schedule and limit fields overwritten, empty sets remain
+inactive, and `sync`/`autoExportSync` are forced off so Firefox Sync cannot
+restore the Linux-timed values on the Mac.
 
 The profile uses Mozilla's required macOS format:
 `com.apple.ManagedClient.preferences`, `mcx_preference_settings`, and
