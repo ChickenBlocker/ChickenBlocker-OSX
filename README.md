@@ -4,9 +4,6 @@ macOS counterpart of [ChickenBlocker](../ChickenBlocker) (Linux). Phase 1 is a
 root **LaunchDaemon that checks and re-asserts the Firefox policy channel and
 the LeechBlock / Page Keyword Filter blocking rules**. Phase 2 adds staged
 North Pole Security Santa tooling for an explicit Safari SigningID block rule.
-See `../ChickenBlocker/.kilo/plans/osx_phase1.md` and
-`../ChickenBlocker/.kilo/plans/osx_phase2_santa.md` for the design and rollout
-gates.
 
 Phase 2 is deployed on the target macOS 27.0.1 Mac: Santa 2026.8.244 activation,
 local and static probe gates, profile rollback, the production Safari rule, and
@@ -62,11 +59,24 @@ normal profiles. The stylesheet preference is enabled and locked by policy;
 CSS is only a UI layer, while `WebsiteFilter` is the actual navigation block.
 
 Extension-state enforcement is a port of the Linux ChickenBlocker daemon:
-if a profile's `extensions.json` shows LeechBlock or PKF disabled or
-missing, Firefox is quit, the entry is re-enabled in place, the startup
-cache is dropped, and Firefox is relaunched — but only if it was already
-running, and at most once per `EXT_RESTART_MIN_INTERVAL` (300 s) so a
-failing install cannot loop.
+if a profile's `extensions.json` shows LeechBlock or PKF disabled or missing,
+Firefox is quit, the entry is repaired in place, the startup cache is dropped,
+and Firefox is relaunched — but only if it was already running, and at most
+once per `EXT_RESTART_MIN_INTERVAL` (300 s) so a failing install cannot loop.
+Private-window access is enforced by the Firefox policy profile. Although the
+grant appears in `extension-preferences.json`, live Firefox testing showed that
+external file repair plus startup-cache invalidation does not invoke Firefox's
+internal permission API and can leave `about:addons` on Don't Allow. The
+verifier therefore does not claim or attempt that unsupported repair. It does
+fingerprint materialized managed preferences and performs one controlled
+Firefox restart when an inactive profile becomes active or its payload changes.
+
+Firefox is policy-gated: in daemon or repair mode, a missing profile, missing
+managed-preferences file, or failed policy sentinel causes the verifier to quit
+Firefox and suppress relaunch. A user can try to reopen it, but the 15-second
+verification loop closes it again. Firefox becomes usable after the current
+profile is installed and its managed preferences materialize; if it was closed
+while unhealthy, launch it normally after activation.
 
 ## Layout
 
@@ -74,7 +84,7 @@ failing install cannot loop.
 ChickenBlocker-OSX/
   config/firefox-policies.json        canonical macOS Firefox policies
   config/santa-release.json           pinned Santa package provenance
-  config/santa-rules.json             reviewed production static rules
+  config/santa-rules.json             reviewed staged browser static rules
   daemon/cb-verifier.sh               check & repair service (bash)
   daemon/com.chickenblocker.verifier.plist
   tools/gen-firefox-profile.py        generates the .mobileconfig (and plist)
@@ -175,6 +185,15 @@ binaries; the explicit `BLOCKLIST` rule for
 `platform:com.apple.Safari` denies Safari. Safari is not removed or modified.
 There is no Santa sync server, MDM enrollment, network extension, Lockdown mode,
 path rule, file-access rule, or WebKit helper rule in this phase.
+
+The source catalog also contains reviewed SigningID rules for nine alternative
+browsers inspected from current notarized vendor artifacts. Those expanded
+rules are staged but are not active on the target until a newly generated
+production profile passes rollback and launch testing and is installed
+manually. The currently installed profile still contains only the Safari rule.
+Use `tools/inspect-browser-artifact.sh ARTIFACT APP_NAME.app` on the Mac to
+repeat identity, signature, Gatekeeper, and artifact-digest inspection without
+installing or launching the browser.
 
 ### Package and activation gate
 
@@ -321,7 +340,7 @@ their `com.apple.Safari.WebApp` identity automatically.
 4. Confirm `santactl status --json` reports one static rule.
 5. Confirm `santactl fileinfo --key Rule <Safari-executable>` reports `Blocked (SigningID, Static)`.
 6. Set `SANTA_ENFORCE_SAFARI=1` in `BASE/verifier.conf`.
-7. Run `./install-santa.sh verify` and then the complete acceptance matrix in the Phase 2 plan.
+7. Run `./install-santa.sh verify` and then the complete Safari acceptance matrix.
 
 The verifier never launches Safari. With enforcement enabled it checks the
 pinned receipt, Santa.app Team ID, extension state, doctor/status, Monitor
@@ -374,7 +393,7 @@ expected files but does not uninstall Santa or deactivate its system extension.
   root session can `launchctl bootout` the daemon, remove the profile via
   System Settings, and edit ordinary files. Drift is closed within seconds
   (profile loss: hourly warning), but a minutes-long bypass window exists
-  under root — exactly as documented in the plan's section 8.
+  under root by design.
 - Santa blocks new Safari executions before useful browser code runs and is a
   stronger boundary than process killing, but Phase 2 remains friction-grade.
   The profile is locally installed, not MDM-owned. An unrestricted local

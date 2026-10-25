@@ -16,8 +16,12 @@ PRODUCTION_PAYLOAD_UUID = "82C48E4A-EE6E-5EC3-B79B-FD3076CD2DBB"
 PROBE_PROFILE_UUID = "B7709707-23C6-5967-8BF5-F2F710CD2127"
 PROBE_PAYLOAD_UUID = "795A99A7-40E6-5070-878F-121AFDAD86D7"
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+SIGNING_ID_RE = re.compile(
+    r"^(?:platform:[A-Za-z0-9][A-Za-z0-9.-]*|[A-Z0-9]{10}:[A-Za-z0-9][A-Za-z0-9.-]*)$"
+)
 ALLOWED_CATALOG_KEYS = {
-    "name", "rule_type", "identifier", "policy", "custom_msg", "enabled"
+    "name", "rule_type", "identifier", "policy", "custom_msg", "enabled",
+    "verified_version", "artifact_sha256", "source_url",
 }
 ALLOWED_RULE_TYPES = {"SIGNINGID"}
 ALLOWED_POLICIES = {"BLOCKLIST"}
@@ -26,6 +30,7 @@ FORBIDDEN_EXACT_IDENTIFIERS = {
     "platform:com.apple.sh",
     "platform:com.apple.bash",
     "platform:com.apple.zsh",
+    "43aq936h96:org.mozilla.firefox",
 }
 
 
@@ -43,7 +48,7 @@ def _forbidden_identifier(identifier):
     lowered = identifier.lower()
     if lowered in FORBIDDEN_EXACT_IDENTIFIERS:
         return True
-    return any(token in lowered for token in ("firefox", "santa", "com.apple.webkit."))
+    return any(token in lowered for token in ("santa", "com.apple.webkit."))
 
 
 def validate_catalog(data):
@@ -72,8 +77,10 @@ def validate_catalog(data):
             raise ValidationError("rule %d uses disallowed policy %s" % (index, policy))
         if not isinstance(rule["enabled"], bool):
             raise ValidationError("rule %d enabled must be boolean" % index)
-        if not identifier.startswith("platform:"):
-            raise ValidationError("rule %d platform SigningID must start with platform:" % index)
+        if not SIGNING_ID_RE.fullmatch(identifier):
+            raise ValidationError(
+                "rule %d identifier must be platform:bundle-id or TEAMID:bundle-id" % index
+            )
         if identifier in identifiers:
             raise ValidationError("duplicate rule identifier: %s" % identifier)
         if _forbidden_identifier(identifier):
@@ -83,6 +90,20 @@ def validate_catalog(data):
         custom_msg = rule.get("custom_msg")
         if custom_msg is not None and not isinstance(custom_msg, str):
             raise ValidationError("rule %d custom_msg must be a string" % index)
+        evidence = (
+            rule.get("verified_version"), rule.get("artifact_sha256"),
+            rule.get("source_url"))
+        if not identifier.startswith("platform:") and not all(evidence):
+            raise ValidationError(
+                "rule %d third-party SigningID requires verification evidence" % index
+            )
+        if any(value is not None for value in evidence):
+            if not all(isinstance(value, str) and value for value in evidence):
+                raise ValidationError("rule %d verification evidence must be complete" % index)
+            if not SHA256_RE.fullmatch(rule["artifact_sha256"]):
+                raise ValidationError("rule %d has invalid artifact_sha256" % index)
+            if not rule["source_url"].startswith("https://"):
+                raise ValidationError("rule %d source_url must use HTTPS" % index)
         if rule["enabled"]:
             output = {
                 "identifier": identifier,

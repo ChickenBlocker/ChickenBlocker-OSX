@@ -17,10 +17,11 @@
 #
 # Extension enforcement (ports the Linux ChickenBlocker daemon): every Firefox
 # profile's extensions.json is checked for a disabled/missing LeechBlock or
-# Page Keyword Filter entry. On drift: Firefox is quit, the entry is
-# re-enabled in extensions.json (active=true, userDisabled=false), the
-# addonStartup cache is dropped, and Firefox is relaunched — but only if it
-# was running before (never started on its own).
+# Page Keyword Filter entry. On drift: Firefox is quit, the entry is re-enabled
+# in extensions.json, the addonStartup cache is dropped, and Firefox is
+# relaunched — but only if it was running before (never started on its own).
+# Private-window grants require Firefox's internal permission API and are
+# enforced by the Firefox policy profile, not by unsupported file mutation.
 #
 # Config: BASE/verifier.conf — CHECK_INTERVAL (seconds, default 15),
 #         RESTART_FIREFOX_ON_REPAIR (0/1, default 1: when a managed-storage
@@ -65,6 +66,8 @@ SKIP=0
 REPAIRED=0
 REPAIRED_MANAGED=0
 REPAIRED_RESTART=0
+FIREFOX_POLICY_RESTART=0
+FIREFOX_POLICY_HEALTHY=0
 EXT_DRIFT_PROFILES=""
 CONSOLE_USER=""
 CONSOLE_UID=""
@@ -418,7 +421,7 @@ if mode == "check":
         e = find(aid)
         if e is None:
             bad.append(aid.split("@")[0] + ":missing")
-        elif e.get("active") is not True:
+        elif e.get("active") is not True or e.get("userDisabled") is not False:
             bad.append(aid.split("@")[0] + ":inactive")
     if bad:
         print(" ".join(bad)); sys.exit(1)
@@ -438,6 +441,7 @@ if changed:
     with open(tmp, "w") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
     os.rename(tmp, path)
+if changed:
     print(",".join(changed))
 PY
 }
@@ -509,9 +513,9 @@ check_extension_state() {
   fi
 }
 
-# repair_profile <dir>: re-enable drifted extensions in one profile's
-# extensions.json (Firefox must already be quit), drop the addonStartup
-# cache. Runs as root (needs the same FDA grant); restores owner and mode.
+# repair_profile <dir>: re-enable drifted extensions while Firefox is quit,
+# then drop the addonStartup cache. Runs as root (needs the same FDA grant);
+# restores owner and mode.
 repair_profile() {
   prof="$1"
   ids="$(ext_ids)"
@@ -646,6 +650,26 @@ check_profile_stylesheets() {
   fi
 }
 
+record_firefox_profile_state() {
+  state="$1"
+  [ "$MODE" != check ] && [ "$(id -u)" = 0 ] || return
+  marker="$BASE/.firefox-profile-state"
+  previous="$(cat "$marker" 2>/dev/null || true)"
+  if [ -n "$previous" ] && [ "$previous" != "$state" ]; then
+    case "$state" in
+      active:*)
+        FIREFOX_POLICY_RESTART=1
+        log "Firefox policy became active or changed — scheduling controlled Firefox restart"
+        ;;
+    esac
+  fi
+  if [ "$previous" != "$state" ]; then
+    printf '%s\n' "$state" > "$marker.cb-new" 2>/dev/null &&
+      chmod 0600 "$marker.cb-new" 2>/dev/null &&
+      mv "$marker.cb-new" "$marker" 2>/dev/null || true
+  fi
+}
+
 # check_firefox_policy_channel: Firefox policies arrive via the
 # locally-installed user configuration profile (com.chickenblocker.firefox,
 # managed org.mozilla.firefox preferences). A bare file dropped into
@@ -676,10 +700,14 @@ check_firefox_policy_channel() {
     fi
   fi
   if [ -z "$problem" ]; then
+    FIREFOX_POLICY_HEALTHY=1
+    fingerprint="$(cksum < "$prefs" 2>/dev/null || true)"
+    record_firefox_profile_state "active:$fingerprint"
     PASS=$((PASS+1))
     [ "$MODE" = check ] && echo "  [PASS] firefox-profile — installed and active for $CONSOLE_USER"
     return
   fi
+  record_firefox_profile_state inactive
   if [ "$MODE" = check ]; then
     FAIL=$((FAIL+1))
     echo "  [FAIL] firefox-profile — $problem (System Settings: install $EXPECTED/org.mozilla.firefox.mobileconfig)"
@@ -696,7 +724,8 @@ check_firefox_policy_channel() {
 }
 
 run_pass() {
-  PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; REPAIRED_RESTART=0; EXT_DRIFT_PROFILES=""
+  PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; REPAIRED_RESTART=0
+  FIREFOX_POLICY_RESTART=0; FIREFOX_POLICY_HEALTHY=0; EXT_DRIFT_PROFILES=""
   SANTA_PROFILE_STATE="unchecked"; SANTA_STATIC_COUNT=""; SANTA_HEALTHY=0; SAFARI_EXE=""; SAFARI_PIDS=""
 
   check_firefox_policy_channel
@@ -756,6 +785,16 @@ recovery() {
   repair_santa_fallback
   terminate_verified_safari
 
+  policy_blocked=0
+  if [ "$FIREFOX_POLICY_HEALTHY" != 1 ]; then
+    policy_blocked=1
+    if firefox_running; then
+      log "Firefox policy inactive — quitting Firefox (fail closed)"
+      quit_firefox
+      killed=1
+    fi
+  fi
+
   if [ -n "$EXT_DRIFT_PROFILES" ]; then
     if [ "$was_running" != 1 ]; then
       while IFS= read -r prof; do
@@ -785,9 +824,12 @@ recovery() {
   want_managed_restart=0
   { [ "$REPAIRED_MANAGED" = 1 ] || [ "$REPAIRED_RESTART" = 1 ]; } &&
     [ "$RESTART_FIREFOX_ON_REPAIR" = 1 ] && want_managed_restart=1
+  [ "$FIREFOX_POLICY_RESTART" = 1 ] && want_managed_restart=1
 
   if [ "$want_managed_restart" = 1 ] || [ "$killed" = 1 ]; then
-    if [ "$was_running" = 1 ]; then
+    if [ "$policy_blocked" = 1 ]; then
+      log "Firefox remains closed until the managed policy is active"
+    elif [ "$was_running" = 1 ]; then
       if firefox_running; then
         log "Firefox state repaired while running — controlled restart"
         quit_firefox

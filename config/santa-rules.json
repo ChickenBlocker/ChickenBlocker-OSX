@@ -7,6 +7,105 @@
       "policy": "BLOCKLIST",
       "custom_msg": "Safari is disabled by ChickenBlocker. Use managed Firefox.",
       "enabled": true
+    },
+    {
+      "name": "Google Chrome",
+      "rule_type": "SIGNINGID",
+      "identifier": "EQHXZ8M8AV:com.google.Chrome",
+      "policy": "BLOCKLIST",
+      "custom_msg": "This browser is disabled by ChickenBlocker. Use managed Firefox.",
+      "enabled": true,
+      "verified_version": "156.0.8078.48",
+      "artifact_sha256": "15d9d8a33eeb858667946f1e9d29d2a82619214c89d1bb16ab113cb63ec11355",
+      "source_url": "https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg"
+    },
+    {
+      "name": "Brave Browser",
+      "rule_type": "SIGNINGID",
+      "identifier": "KL8N8XSYF4:com.brave.Browser",
+      "policy": "BLOCKLIST",
+      "custom_msg": "This browser is disabled by ChickenBlocker. Use managed Firefox.",
+      "enabled": true,
+      "verified_version": "156.1.98.60",
+      "artifact_sha256": "750b959778670a71b76c60bab2664ebc29f0b3b6093acdc8acf5186f46debb7d",
+      "source_url": "https://updates-cdn.bravesoftware.com/sparkle/Brave-Browser/stable-arm64/198.60/Brave-Browser-arm64.dmg"
+    },
+    {
+      "name": "Microsoft Edge",
+      "rule_type": "SIGNINGID",
+      "identifier": "UBF8T346G9:com.microsoft.edgemac",
+      "policy": "BLOCKLIST",
+      "custom_msg": "This browser is disabled by ChickenBlocker. Use managed Firefox.",
+      "enabled": true,
+      "verified_version": "156.0.4314.42",
+      "artifact_sha256": "78c21f4f0bcca7e914805de6b3e938bd4464cf8ed7d0392256c0ccafc5b96dda",
+      "source_url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/f082dcef-be0f-4c7c-83a8-ff101a911cf2/MicrosoftEdge-156.0.4314.42.dmg"
+    },
+    {
+      "name": "Opera",
+      "rule_type": "SIGNINGID",
+      "identifier": "A2P9LX4JPN:com.operasoftware.Opera",
+      "policy": "BLOCKLIST",
+      "custom_msg": "This browser is disabled by ChickenBlocker. Use managed Firefox.",
+      "enabled": true,
+      "verified_version": "138.0.6044.24",
+      "artifact_sha256": "55ca0aa8093326f9aca99176ee3641270072bddf79cba10bbdf2e251529c8c4a",
+      "source_url": "https://get.geo.opera.com/pub/opera/desktop/138.0.6044.24/mac/Opera_138.0.6044.24_Setup.dmg"
+    },
+    {
+      "name": "Orion Browser",
+      "rule_type": "SIGNINGID",
+      "identifier": "TFVG979488:com.kagi.kagimacOS",
+      "policy": "BLOCKLIST",
+      "custom_msg": "This browser is disabled by ChickenBlocker. Use managed Firefox.",
+      "enabled": true,
+      "verified_version": "1.1.3",
+      "artifact_sha256": "63f6f640c43fe2f857b6ac461785518decd475375fcdf1ffd470c3758623b830",
+      "source_url": "https://cdn.kagi.com/updates/26_0/152.zip"
+    },
+    {
+      "name": "DuckDuckGo Browser",
+      "rule_type": "SIGNINGID",
+      "identifier": "HKE973VLUW:com.duckduckgo.macos.browser",
+      "policy": "BLOCKLIST",
+      "custom_msg": "This browser is disabled by ChickenBlocker. Use managed Firefox.",
+      "enabled": true,
+      "verified_version": "1.212.0",
+      "artifact_sha256": "f6a669cffe4e2338f09efe6d4d1dc018227fe4a027bec9c3735c9cae72e820c4",
+      "source_url": "https://staticcdn.duckduckgo.com/macos-desktop-browser/duckduckgo-1.212.0.845.dmg"
+    },
+    {
+      "name": "Tor Browser",
+      "rule_type": "SIGNINGID",
+      "identifier": "MADPSAYN6T:org.torproject.torbrowser",
+      "policy": "BLOCKLIST",
+      "custom_msg": "This browser is disabled by ChickenBlocker. Use managed Firefox.",
+      "enabled": true,
+      "verified_version": "15.0.26",
+      "artifact_sha256": "365857a805dcb7fa93a379b013059d56db745ca80b88fd2eab6375d9e2d960c8",
+      "source_url": "https://www.torproject.org/dist/torbrowser/15.0.26/tor-browser-macos-15.0.26.dmg"
+    },
+    {
+      "name": "Firefox Developer Edition",
+      "rule_type": "SIGNINGID",
+      "identifier": "43AQ936H96:org.mozilla.firefoxdeveloperedition",
+      "policy": "BLOCKLIST",
+      "custom_msg": "This Firefox variant is disabled by ChickenBlocker. Use managed Firefox stable.",
+      "enabled": true,
+      "verified_version": "159.0b5",
+      "artifact_sha256": "a868078b490353a48b98f73a05e54f90d2f6c7ab4c1e830827ce53fe05c78300",
+      "source_url": "https://download-installer.cdn.mozilla.net/pub/devedition/releases/159.0b5/mac/en-US/Firefox%20159.0b5.dmg"
+    },
+    {
+      "name": "Firefox Nightly",
+      "rule_type": "SIGNINGID",
+      "identifier": "43AQ936H96:org.mozilla.nightly",
+      "policy": "BLOCKLIST",
+      "custom_msg": "This Firefox variant is disabled by ChickenBlocker. Use managed Firefox stable.",
+      "enabled": true,
+      "verified_version": "161.0a1",
+      "artifact_sha256": "a0dc0d812928b834e3750786a4d5aa14119a9575fdd8d23ebb7ec04ae5806008",
+      "source_url": "https://ftp.mozilla.org/pub/firefox/nightly/2026/10/2026-10-23-09-50-57-mozilla-central/firefox-161.0a1.en-US.mac.dmg"
     }
   ]
 }
