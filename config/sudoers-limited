@@ -1,0 +1,17 @@
+# Restricted daily administration for stevehuis. Installed as root:wheel 0440.
+# Argument regexes are anchored; privileged wrappers perform their own checks.
+Defaults:stevehuis log_allowed
+
+Cmnd_Alias CHICKENBLOCKER_DAILY = \
+    /sbin/reboot, \
+    /sbin/shutdown -r now, \
+    /bin/launchctl kickstart -k system/com.chickenblocker.verifier, \
+    /usr/local/bin/zerotier-cli join ^[0-9A-Fa-f]{16}$, \
+    /usr/local/libexec/chickenblocker/set-iogpu-wired-limit ^(0|[1-9][0-9]{0\,5})$, \
+    /usr/local/libexec/chickenblocker/tcpdump, \
+    /usr/sbin/networksetup -setairportpower en0 on, \
+    /usr/sbin/networksetup -setairportpower en0 off, \
+    /usr/bin/pmset -a displaysleep 15, \
+    /Library/Application\ Support/ChickenBlocker/bin/cb-bash /Library/Application\ Support/ChickenBlocker/verifier.sh check
+
+stevehuis ALL=(root) CHICKENBLOCKER_DAILY

@@ -36,15 +36,16 @@ install_local() {
   install -m 0755 -o root -g wheel "$REPO/daemon/cb-verifier.sh" "$BASE/verifier.sh"
 
   echo ">> Building private interpreter $BASE/bin/cb-bash (FDA is granted to THIS binary only)"
-  install -d -o root -g wheel -m 0755 "$BASE/bin"
+  install -d -o root -g wheel -m 0750 "$BASE/bin"
   if [ ! -x "$BASE/bin/cb-bash" ] || ! cmp -s /bin/bash "$BASE/bin/cb-bash"; then
     cp /bin/bash "$BASE/bin/cb-bash.new"
     codesign --force --sign - "$BASE/bin/cb-bash.new" >/dev/null 2>&1 || \
       die "codesign failed (Xcode Command Line Tools required)"
-    chmod 0755 "$BASE/bin/cb-bash.new"
+    chmod 0700 "$BASE/bin/cb-bash.new"
     chown root:wheel "$BASE/bin/cb-bash.new"
     mv "$BASE/bin/cb-bash.new" "$BASE/bin/cb-bash"
   fi
+  chmod 0700 "$BASE/bin/cb-bash"
   if [ ! -f "$BASE/verifier.conf" ]; then
     printf 'CHECK_INTERVAL=15\nRESTART_FIREFOX_ON_REPAIR=1\nEXT_RESTART_MIN_INTERVAL=300\nSANTA_CHECKS=0\nSANTA_ENFORCE_SAFARI=0\nSANTA_LOCAL_RULE_FALLBACK=1\nSANTA_REINSTALL=0\n' > "$BASE/verifier.conf"
     chown root:wheel "$BASE/verifier.conf"
