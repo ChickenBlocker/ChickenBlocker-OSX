@@ -5,6 +5,7 @@
   "short_break_seconds": 300,
   "long_break_seconds": 1800,
   "long_break_every": 4,
+  "warning_seconds": 10,
   "night_start_hour": 0,
   "night_end_hour": 8,
   "suspend_gap_seconds": 45,

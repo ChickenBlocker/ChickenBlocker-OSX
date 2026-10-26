@@ -6,7 +6,7 @@
     <string>com.chickenblocker.breaks</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Library/Application Support/ChickenBlocker/agent/cb-break-overlay</string>
+        <string>/Library/Application Support/ChickenBlocker/agent/ChickenBlocker Breaks.app/Contents/MacOS/cb-break-overlay</string>
     </array>
     <key>LimitLoadToSessionType</key>
     <string>Aqua</string>

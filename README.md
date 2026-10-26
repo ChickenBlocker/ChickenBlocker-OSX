@@ -88,6 +88,7 @@ ChickenBlocker-OSX/
   config/santa-release.json           pinned Santa package provenance
   config/santa-rules.json             reviewed staged browser static rules
   agent/cb-break-overlay.swift        native multi-display break renderer
+  agent/cb-break-overlay-Info.plist   background-app identity for notifications
   agent/com.chickenblocker.breaks.plist
   daemon/cb-verifier.sh               check & repair service (bash)
   daemon/com.chickenblocker.verifier.plist
@@ -151,6 +152,19 @@ The canonical schedule in `config/breaks.json` is:
 - suspend time does not count as work; a sufficiently long sleep satisfies
   the pending break,
 - no skip or postpone controls.
+
+The menu-bar eye icon shows the current interval in the four-break cycle (for
+example, `Interval: 1/4`), the next break time, and **Take a break now**. That
+action can only move the next scheduled short or long break earlier; it cannot
+postpone, shorten, or dismiss a break. The user agent writes a mode-`0600`
+request, and the root scheduler validates its type, owner, age, and contents
+before consuming it. The renderer is installed as the background application
+`ChickenBlocker Breaks.app` so macOS can grant notification permission to its
+stable `com.chickenblocker.breaks` identity. A one-shot notification announces
+the upcoming short or long break `warning_seconds` before its root-owned
+deadline (10 seconds in the canonical configuration). Accept macOS's
+notification authorization prompt after the first bundled-agent launch; the
+app then appears as **ChickenBlocker Breaks** in Notification settings.
 
 The first release intentionally leaves `allow_escape: true`. During a break,
 Escape dismisses only that current overlay and the screen identifies itself as

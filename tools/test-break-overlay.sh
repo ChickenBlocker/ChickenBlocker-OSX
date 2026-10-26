@@ -28,6 +28,7 @@ PY
 
 xcrun swiftc -parse-as-library "$REPO/agent/cb-break-overlay.swift" \
   -o "$TMP/cb-break-overlay"
-CB_BREAK_COMMAND_PATH="$TMP/command.json" "$TMP/cb-break-overlay" &
+CB_BREAK_COMMAND_PATH="$TMP/command.json" \
+CB_BREAK_REQUEST_PATH="$TMP/request.json" "$TMP/cb-break-overlay" &
 PID=$!
 sleep 30

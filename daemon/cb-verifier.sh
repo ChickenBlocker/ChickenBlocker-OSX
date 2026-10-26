@@ -86,7 +86,10 @@ BREAK_LABEL="com.chickenblocker.breaks"
 BREAK_PLIST="/Library/LaunchAgents/$BREAK_LABEL.plist"
 BREAK_CONFIG="$BASE/breaks.json"
 BREAK_SCHEDULER="$BASE/bin/break-scheduler.py"
-BREAK_AGENT="$BASE/agent/cb-break-overlay"
+BREAK_APP="ChickenBlocker Breaks.app"
+BREAK_AGENT="$BASE/agent/$BREAK_APP/Contents/MacOS/cb-break-overlay"
+BREAK_INFO="$BASE/agent/$BREAK_APP/Contents/Info.plist"
+BREAK_SIGNATURE="$BASE/agent/$BREAK_APP/Contents/_CodeSignature/CodeResources"
 BREAK_STATE="$BASE/break-state.json"
 BREAK_COMMAND="$BASE/break-command.json"
 BREAK_REPAIRED=0
@@ -637,8 +640,13 @@ check_break_components() {
   do_check "break-config" "$EXPECTED/breaks.json" "$BREAK_CONFIG" 0
   do_check "break-scheduler" "$EXPECTED/break-scheduler.py" \
     "$BREAK_SCHEDULER" 0 root:wheel 0 700
-  do_check "break-agent" "$EXPECTED/cb-break-overlay" \
+  do_check "break-agent" "$EXPECTED/$BREAK_APP/Contents/MacOS/cb-break-overlay" \
     "$BREAK_AGENT" 0 root:wheel 0 755
+  do_check "break-agent-info" "$EXPECTED/$BREAK_APP/Contents/Info.plist" \
+    "$BREAK_INFO" 0 root:wheel 0 644
+  do_check "break-agent-signature" \
+    "$EXPECTED/$BREAK_APP/Contents/_CodeSignature/CodeResources" \
+    "$BREAK_SIGNATURE" 0 root:wheel 0 644
   do_check "break-launchagent" "$EXPECTED/$BREAK_LABEL.plist" \
     "$BREAK_PLIST" 0
 

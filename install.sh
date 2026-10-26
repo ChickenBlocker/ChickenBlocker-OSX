@@ -13,7 +13,7 @@
 #   /Library/Application Support/ChickenBlocker/expected/firefox-policies.json
 #   /Library/LaunchDaemons/com.chickenblocker.verifier.plist
 #   /Library/LaunchAgents/com.chickenblocker.breaks.plist
-#   /Library/Application Support/ChickenBlocker/agent/cb-break-overlay
+#   /Library/Application Support/ChickenBlocker/agent/ChickenBlocker Breaks.app
 #
 # LeechBlock/keyword rules are NOT part of this step: they are pushed from
 # the Linux ChickenBlocker machine with sync/sync-to-mac.sh afterwards.
@@ -21,6 +21,7 @@ set -eu
 
 LABEL="com.chickenblocker.verifier"
 BREAK_LABEL="com.chickenblocker.breaks"
+BREAK_APP="ChickenBlocker Breaks.app"
 BASE="/Library/Application Support/ChickenBlocker"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
 BREAK_PLIST="/Library/LaunchAgents/$BREAK_LABEL.plist"
@@ -54,15 +55,20 @@ install_local() {
 
   echo ">> Building macOS break overlay"
   command -v xcrun >/dev/null 2>&1 || die "xcrun is required (install Xcode Command Line Tools)"
+  rm -rf "$BASE/expected/$BREAK_APP"
+  install -d -o root -g wheel -m 0755 \
+    "$BASE/expected/$BREAK_APP/Contents/MacOS"
   xcrun swiftc -parse-as-library "$REPO/agent/cb-break-overlay.swift" \
-    -o "$BASE/expected/cb-break-overlay.new"
-  codesign --force --sign - "$BASE/expected/cb-break-overlay.new" >/dev/null 2>&1 || \
-    die "codesign failed for break overlay"
-  install -m 0755 -o root -g wheel "$BASE/expected/cb-break-overlay.new" \
-    "$BASE/expected/cb-break-overlay"
-  install -m 0755 -o root -g wheel "$BASE/expected/cb-break-overlay" \
-    "$BASE/agent/cb-break-overlay"
-  rm -f "$BASE/expected/cb-break-overlay.new"
+    -o "$BASE/expected/$BREAK_APP/Contents/MacOS/cb-break-overlay"
+  install -m 0644 -o root -g wheel "$REPO/agent/cb-break-overlay-Info.plist" \
+    "$BASE/expected/$BREAK_APP/Contents/Info.plist"
+  chown -R root:wheel "$BASE/expected/$BREAK_APP"
+  codesign --force --deep --sign - "$BASE/expected/$BREAK_APP" >/dev/null 2>&1 || \
+    die "codesign failed for break overlay app"
+  rm -rf "$BASE/agent/$BREAK_APP"
+  ditto "$BASE/expected/$BREAK_APP" "$BASE/agent/$BREAK_APP"
+  chown -R root:wheel "$BASE/agent/$BREAK_APP"
+  rm -f "$BASE/expected/cb-break-overlay" "$BASE/agent/cb-break-overlay"
   install -m 0700 -o root -g wheel "$REPO/tools/break-scheduler.py" \
     "$BASE/expected/break-scheduler.py"
   install -m 0700 -o root -g wheel "$BASE/expected/break-scheduler.py" \

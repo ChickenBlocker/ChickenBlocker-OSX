@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import tempfile
 import time
 from datetime import datetime, timedelta
@@ -29,6 +30,8 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ValueError(f"{key} must be an hour from 0 through 23")
     if config["night_start_hour"] == config["night_end_hour"]:
         raise ValueError("night window must not span the full day")
+    if not isinstance(config.get("warning_seconds", 10), int) or config.get("warning_seconds", 10) < 0:
+        raise ValueError("warning_seconds must be a non-negative integer")
     for key in ("short_messages", "long_messages"):
         value = config.get(key)
         if not isinstance(value, list) or not value or not all(isinstance(item, str) for item in value):
@@ -63,10 +66,18 @@ def fresh_state(config: dict[str, Any], now: int) -> dict[str, Any]:
 
 def command_for(config: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     phase = state["phase"]
+    schedule = {
+        "interval": int(state["cycle"]) + 1,
+        "total_intervals": config["long_break_every"],
+        "warning_seconds": config.get("warning_seconds", 10),
+    }
     if phase == "work":
-        return {
+        return schedule | {
             "mode": "work", "until": state["deadline"], "kind": "work", "message": "",
             "allow_escape": bool(config.get("allow_escape", False)),
+            "next_break_kind": (
+                "long" if state["cycle"] == config["long_break_every"] - 1 else "short"
+            ),
         }
     kind = state.get("break_type", "short")
     if kind == "night":
@@ -77,13 +88,19 @@ def command_for(config: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]
     else:
         messages = config["short_messages"]
         message = messages[state["cycle"] % len(messages)]
-    return {
+    return schedule | {
         "mode": "break", "until": state["deadline"], "kind": kind, "message": message,
         "allow_escape": bool(config.get("allow_escape", False)),
+        "next_break_kind": kind,
     }
 
 
-def advance(config: dict[str, Any], state: dict[str, Any] | None, now: int) -> tuple[dict[str, Any], dict[str, Any]]:
+def advance(
+    config: dict[str, Any],
+    state: dict[str, Any] | None,
+    now: int,
+    manual_break: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     validate_config(config)
     if not config.get("enabled", True):
         state = fresh_state(config, now)
@@ -124,6 +141,14 @@ def advance(config: dict[str, Any], state: dict[str, Any] | None, now: int) -> t
             state["cycle"] = (state["cycle"] + 1) % config["long_break_every"]
             state["deadline"] = now + config["work_seconds"]
 
+    if manual_break and state["phase"] == "work":
+        is_long = state["cycle"] == config["long_break_every"] - 1
+        state["phase"] = "break"
+        state["break_type"] = "long" if is_long else "short"
+        state["deadline"] = now + (
+            config["long_break_seconds"] if is_long else config["short_break_seconds"]
+        )
+
     if state["phase"] == "break" and now >= int(state["deadline"]):
         state = {
             "phase": "work",
@@ -142,6 +167,56 @@ def advance(config: dict[str, Any], state: dict[str, Any] | None, now: int) -> t
 
     state["last_tick"] = now
     return state, command_for(config, state)
+
+
+def consume_break_request(
+    now: int,
+    path: Path | None = None,
+    expected_uid: int | None = None,
+) -> bool:
+    """Consume a request from the console user without trusting its contents."""
+    if expected_uid is None:
+        try:
+            expected_uid = os.stat("/dev/console").st_uid
+        except OSError:
+            return False
+    if expected_uid == 0:
+        return False
+    if path is None:
+        path = Path(f"/tmp/com.chickenblocker.break-request.{expected_uid}.json")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return False
+
+    trusted = False
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            stat.S_ISREG(metadata.st_mode)
+            and metadata.st_uid == expected_uid
+            and metadata.st_nlink == 1
+            and metadata.st_size <= 1024
+            and metadata.st_mode & 0o077 == 0
+        ):
+            payload = json.loads(os.read(descriptor, 1025).decode("utf-8"))
+            requested_at = payload.get("requested_at")
+            trusted = (
+                payload.get("action") == "take_break"
+                and isinstance(requested_at, int)
+                and not isinstance(requested_at, bool)
+                and now - 300 <= requested_at <= now + 30
+            )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+        trusted = False
+    finally:
+        os.close(descriptor)
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    return trusted
 
 
 def atomic_json(path: Path, value: dict[str, Any], mode: int) -> None:
@@ -177,7 +252,8 @@ def main() -> int:
         state = json.loads(args.state.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         state = None
-    state, command = advance(config, state, args.now or int(time.time()))
+    now = args.now or int(time.time())
+    state, command = advance(config, state, now, consume_break_request(now))
     atomic_json(args.state, state, 0o600)
     atomic_json(args.command, command, 0o644)
     return 0

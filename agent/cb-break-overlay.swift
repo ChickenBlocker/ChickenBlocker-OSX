@@ -1,10 +1,15 @@
 import AppKit
+import Darwin
 import Foundation
 import IOKit.ps
+import UserNotifications
 
 private let commandURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment[
     "CB_BREAK_COMMAND_PATH"
 ] ?? "/Library/Application Support/ChickenBlocker/break-command.json")
+private let requestURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment[
+    "CB_BREAK_REQUEST_PATH"
+] ?? "/tmp/com.chickenblocker.break-request.\(getuid()).json")
 
 private struct BreakCommand: Decodable {
     let mode: String
@@ -12,10 +17,17 @@ private struct BreakCommand: Decodable {
     let kind: String
     let message: String
     let allowEscape: Bool
+    let interval: Int?
+    let totalIntervals: Int?
+    let warningSeconds: Int?
+    let nextBreakKind: String?
 
     private enum CodingKeys: String, CodingKey {
-        case mode, until, kind, message
+        case mode, until, kind, message, interval
         case allowEscape = "allow_escape"
+        case totalIntervals = "total_intervals"
+        case warningSeconds = "warning_seconds"
+        case nextBreakKind = "next_break_kind"
     }
 }
 
@@ -87,7 +99,7 @@ private final class OverlayWindow: NSWindow {
 }
 
 @MainActor
-private final class AppDelegate: NSObject, NSApplicationDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var windows: [NSWindow] = []
     private var controllers: [OverlayViewController] = []
     private var timer: Timer?
@@ -95,6 +107,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentCommand: BreakCommand?
     private var dismissedUntil: TimeInterval = 0
     private var keyMonitor: Any?
+    private var statusItem: NSStatusItem?
+    private let intervalItem = NSMenuItem(title: "Interval: -", action: nil, keyEquivalent: "")
+    private let scheduleItem = NSMenuItem(title: "Schedule unavailable", action: nil, keyEquivalent: "")
+    private lazy var takeBreakItem = NSMenuItem(
+        title: "Take a break now", action: #selector(requestBreakNow), keyEquivalent: ""
+    )
+    private var requestPendingAt: TimeInterval?
+    private var notifiedDeadline: TimeInterval?
+    private let warningNotificationID = "com.chickenblocker.break-warning"
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE d MMM  HH:mm"
@@ -103,6 +124,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        let notificationCenter = UNUserNotificationCenter.current()
+        notificationCenter.delegate = self
+        notificationCenter.requestAuthorization(options: [.alert]) { _, _ in }
+        configureStatusItem()
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53, let command = self?.currentCommand, command.allowEscape {
                 self?.dismissedUntil = command.until
@@ -115,6 +140,54 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner])
+    }
+
+    private func configureStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(
+            systemSymbolName: "eye", accessibilityDescription: "ChickenBlocker breaks"
+        )
+        let menu = NSMenu()
+        intervalItem.isEnabled = false
+        menu.addItem(intervalItem)
+        scheduleItem.isEnabled = false
+        menu.addItem(scheduleItem)
+        menu.addItem(.separator())
+        takeBreakItem.target = self
+        menu.addItem(takeBreakItem)
+        item.menu = menu
+        statusItem = item
+    }
+
+    @objc private func requestBreakNow() {
+        let now = Date().timeIntervalSince1970
+        guard currentCommand?.mode == "work" else { return }
+        let payload: [String: Any] = ["action": "take_break", "requested_at": Int(now)]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
+            scheduleItem.title = "Could not request break"
+            return
+        }
+        let temporaryURL = requestURL.deletingLastPathComponent().appendingPathComponent(
+            ".\(requestURL.lastPathComponent).\(UUID().uuidString)"
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        guard FileManager.default.createFile(
+            atPath: temporaryURL.path, contents: data, attributes: [.posixPermissions: 0o600]
+        ), rename(temporaryURL.path, requestURL.path) == 0 else {
+            scheduleItem.title = "Could not request break"
+            return
+        }
+        requestPendingAt = now
+        scheduleItem.title = "Break requested"
+        takeBreakItem.isEnabled = false
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -182,13 +255,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refresh() {
         let now = Date().timeIntervalSince1970
-        guard let command = readCommand(), command.mode == "break", command.until > now else {
+        guard let command = readCommand() else {
+            scheduleItem.title = "Schedule unavailable"
+            takeBreakItem.isEnabled = false
             currentCommand = nil
             dismissedUntil = 0
             hideOverlay()
             return
         }
         currentCommand = command
+        updateStatusMenu(command: command, now: now)
+        updateBreakWarning(command: command, now: now)
+        guard command.mode == "break", command.until > now else {
+            dismissedUntil = 0
+            hideOverlay()
+            return
+        }
         if dismissedUntil >= command.until {
             hideOverlay()
             return
@@ -207,6 +289,64 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             NSCursor.hide()
             cursorHidden = true
         }
+    }
+
+    private func updateStatusMenu(command: BreakCommand, now: TimeInterval) {
+        if let interval = command.interval, let total = command.totalIntervals {
+            intervalItem.title = "Interval: \(interval)/\(total)"
+            intervalItem.isHidden = false
+        } else {
+            intervalItem.isHidden = true
+        }
+        if command.mode == "break", command.until > now {
+            scheduleItem.title = "Break in progress"
+            takeBreakItem.isEnabled = false
+            requestPendingAt = nil
+            return
+        }
+        if let pendingAt = requestPendingAt, now - pendingAt < 30 {
+            scheduleItem.title = "Break requested"
+            takeBreakItem.isEnabled = false
+            return
+        }
+        requestPendingAt = nil
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        scheduleItem.title = "Next break at \(formatter.string(from: Date(timeIntervalSince1970: command.until)))"
+        takeBreakItem.isEnabled = command.mode == "work" && command.until > now
+    }
+
+    private func updateBreakWarning(command: BreakCommand, now: TimeInterval) {
+        guard command.mode == "work", command.until > now else {
+            clearBreakWarning()
+            notifiedDeadline = nil
+            return
+        }
+        if let notifiedDeadline, notifiedDeadline != command.until {
+            clearBreakWarning()
+            self.notifiedDeadline = nil
+        }
+        let warningSeconds = max(0, command.warningSeconds ?? 10)
+        let remaining = Int(ceil(command.until - now))
+        guard warningSeconds > 0, remaining <= warningSeconds,
+              notifiedDeadline != command.until else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "ChickenBlocker"
+        let kind = command.nextBreakKind == "long" ? "long" : "short"
+        content.body = "Ready for a \(kind) break in \(remaining) seconds"
+        let request = UNNotificationRequest(
+            identifier: warningNotificationID, content: content, trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
+        notifiedDeadline = command.until
+    }
+
+    private func clearBreakWarning() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [warningNotificationID])
+        center.removeDeliveredNotifications(withIdentifiers: [warningNotificationID])
     }
 
     private func hideOverlay() {
