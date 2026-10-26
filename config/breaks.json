@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "allow_escape": true,
+  "allow_escape": false,
   "work_seconds": 1800,
   "short_break_seconds": 300,
   "long_break_seconds": 1800,

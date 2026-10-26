@@ -139,6 +139,7 @@ install_local() {
     die "LaunchDaemon did not load (bootstrap EIO); check: sudo launchctl print system/$LABEL"
 
   console_uid="$(stat -f %u /dev/console 2>/dev/null || true)"
+  console_user="$(stat -f %Su /dev/console 2>/dev/null || true)"
   if [ -n "$console_uid" ] && [ "$console_uid" != 0 ]; then
     launchctl bootout "gui/$console_uid/$BREAK_LABEL" 2>/dev/null || true
     launchctl bootstrap "gui/$console_uid" "$BREAK_PLIST" 2>/dev/null || true
@@ -149,7 +150,7 @@ install_local() {
   "$BASE/bin/cb-bash" "$BASE/verifier.sh" check || true
 
   echo
-  profile_user="${SUDO_USER:-$(stat -f %Su /dev/console 2>/dev/null || true)}"
+  profile_user="$console_user"
   profile_prefs="/Library/Managed Preferences/$profile_user/org.mozilla.firefox.plist"
   if [ -n "$profile_user" ] &&
      profiles show -type configuration -user "$profile_user" 2>/dev/null | grep -q "com.chickenblocker.firefox" &&
@@ -157,12 +158,21 @@ install_local() {
      [ "$(plutil -extract DisablePrivateBrowsing raw -o - "$profile_prefs" 2>/dev/null || true)" = true ]; then
     echo "Firefox configuration profile: installed and active for $profile_user"
   else
-    echo "[!] Firefox policies need a manual profile install/reinstall on the Mac:"
-    echo "    Finder -> Cmd+Shift+G -> $BASE/expected"
-    echo "    double-click org.mozilla.firefox.mobileconfig (stages it), then"
-    echo "    System Settings -> General -> Device Management -> double-click the"
-    echo "    downloaded profile -> Install -> Install (admin password),"
-    echo "    then restart Firefox (or: sudo launchctl kickstart -k system/$LABEL)"
+    echo "[!] Firefox policies need approval in Device Management."
+    if [ -n "$profile_user" ] && [ "$profile_user" != root ] &&
+       [ -n "$console_uid" ] && [ "$console_uid" != 0 ]; then
+      launchctl asuser "$console_uid" sudo -u "$profile_user" \
+        open "$BASE/expected/org.mozilla.firefox.mobileconfig" >/dev/null 2>&1 || true
+      sleep 2
+      launchctl asuser "$console_uid" sudo -u "$profile_user" \
+        open 'x-apple.systempreferences:com.apple.Profiles-Settings.extension' \
+        >/dev/null 2>&1 || true
+      echo "    Staged org.mozilla.firefox.mobileconfig and opened Device Management."
+    else
+      echo "    No GUI console user is available; stage this profile after login:"
+      echo "    $BASE/expected/org.mozilla.firefox.mobileconfig"
+    fi
+    echo "    Select the Firefox profile, then choose Install (admin approval required)."
   fi
   fda="$(sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
     "SELECT auth_value FROM access WHERE service='kTCCServiceSystemPolicyAllFiles' AND client LIKE '%cb-bash';" 2>/dev/null || true)"

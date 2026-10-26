@@ -82,8 +82,10 @@ private final class OverlayViewController: NSViewController {
         view = root
     }
 
-    func update(command: BreakCommand, now: TimeInterval, status: String) {
-        messageLabel.stringValue = command.message
+    func update(command: BreakCommand, now: TimeInterval, status: String, scheduleOverdue: Bool) {
+        messageLabel.stringValue = scheduleOverdue
+            ? "Break schedule is overdue. Waiting for the scheduler."
+            : command.message
         let remaining = max(0, Int(ceil(command.until - now)))
         countdownLabel.stringValue = String(
             format: "%02d:%02d:%02d", remaining / 3600, (remaining / 60) % 60, remaining % 60
@@ -266,7 +268,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         currentCommand = command
         updateStatusMenu(command: command, now: now)
         updateBreakWarning(command: command, now: now)
-        guard command.mode == "break", command.until > now else {
+        let scheduleOverdue = command.mode == "work" && command.until <= now
+        guard scheduleOverdue || (command.mode == "break" && command.until > now) else {
             dismissedUntil = 0
             hideOverlay()
             return
@@ -281,7 +284,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         }
         let status = statusText(now: now)
         for controller in controllers {
-            controller.update(command: command, now: now, status: status)
+            controller.update(
+                command: command, now: now, status: status, scheduleOverdue: scheduleOverdue
+            )
         }
         windows.forEach { $0.makeKeyAndOrderFront(nil) }
         NSApp.activate(ignoringOtherApps: true)
@@ -302,6 +307,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
             scheduleItem.title = "Break in progress"
             takeBreakItem.isEnabled = false
             requestPendingAt = nil
+            return
+        }
+        if command.mode == "work", command.until <= now {
+            scheduleItem.title = "Break overdue - scheduler unavailable"
+            takeBreakItem.isEnabled = false
             return
         }
         if let pendingAt = requestPendingAt, now - pendingAt < 30 {
