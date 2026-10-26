@@ -92,30 +92,89 @@ ChickenBlocker-OSX/
   agent/com.chickenblocker.breaks.plist
   daemon/cb-verifier.sh               check & repair service (bash)
   daemon/com.chickenblocker.verifier.plist
+  daemon/cb-release-client.py         signed appliance-release pull client
+  daemon/com.chickenblocker.release.plist
   tools/gen-firefox-profile.py        generates the .mobileconfig (and plist)
   tools/break-scheduler.py             root-owned persisted schedule state machine
   tools/test-break-overlay.sh          unprivileged 30-second renderer test
+  tools/publish-release.py             deterministic signed release publisher
+  tools/build-release-bundle.py        fixed repository/rules bundle builder
+  tools/stage-repository-release.sh    unprivileged appliance staging workflow
+  tools/setup-release-appliance.sh     Debian static release service setup
+  tools/install-release-client.sh      protected-Mac pull client bootstrap
   tools/gen-santa-profile.py          deterministic production/probe/rollback profiles
   tools/fetch-santa.sh                downloads and verifies the pinned official PKG
   tools/santa-probe.c                 no-side-effect disposable execution probe
   sync/extract_rules.py               Linux side: snapshot rules to staged/
-  sync/sync-to-mac.sh                 Linux side: push staged/ to the Mac
-  install.sh / uninstall.sh           Phase 1 local or over-SSH install
+  sync/sync-to-mac.sh                 build/stage a signed rules release
+  install.sh / uninstall.sh           explicit local admin operations
   install-santa.sh                    explicit Phase 2 staging commands
 ```
+
+## Signed appliance releases
+
+The optional offline admin appliance replaces the nonfunctional push-less MDM
+deployment path. Its signing private key never leaves the appliance. The Mac
+stores only the public key and polls a read-only HTTP service over ZeroTier;
+every canonical manifest is signature-checked, every payload is hash-checked,
+and lower release sequences are rejected. Existing policy remains active while
+the appliance is off.
+
+On the Debian appliance, with this repository staged at
+`/tmp/ChickenBlocker-OSX`:
+
+```sh
+su -c 'bash /tmp/ChickenBlocker-OSX/tools/setup-release-appliance.sh'
+```
+
+Copy `/etc/chickenblocker-release/signing-public.pem` to removable media or an
+administrator-only temporary location on the Mac. Verify the SHA-256 public-key
+fingerprint shown by the setup script at both ends. Then, from `svc-admin`:
+
+```sh
+sudo ./tools/install-release-client.sh /path/to/signing-public.pem
+```
+
+Publish the harmless create/remove smoke releases from the appliance console:
+
+```sh
+cb-publish-release --bundle /path/to/ChickenBlocker-OSX/release/smoke-add --sequence 1
+cb-publish-release --bundle /path/to/ChickenBlocker-OSX/release/smoke-remove --sequence 2
+```
+
+Routine repository deployment never opens an SSH session to the protected Mac
+and never asks the daily account for generic sudo. Build and upload an
+unprivileged staging bundle, review it on the appliance, then publish it with an
+explicit next sequence from the appliance console:
+
+```sh
+./tools/stage-repository-release.sh mdm-admin@10.11.133.222
+
+# On the appliance console as root, after reviewing the staged files:
+cb-publish-release \
+  --bundle /home/mdm-admin/chickenblocker-release-staging/repository \
+  --sequence N
+```
+
+The protected Mac verifies the manifest signature and payload before invoking
+the fixed bundle installer. The release client runs the independent verifier
+audit before recording the sequence as accepted.
+
+Do not remove MicroMDM or rotate the temporary `svc-admin` password until both
+smoke releases, invalid-signature/rollback tests, reboot behavior, and
+appliance-off enforcement have passed.
 
 ## Install (fresh Mac)
 
 ```sh
-# 1. install daemon + files (from Linux: over SSH; SSH is used only when a
-#    target is given)
-./install.sh user@mac-host
+# 1. From an administrator session on the Mac, bootstrap daemon + files.
+sudo ./install.sh
 
 # 2. on the Mac: grant Full Disk Access to the verifier's private interpreter
 #    (NOT /bin/bash):
 #    System Settings -> Privacy & Security -> Full Disk Access -> +
 #    Cmd+Shift+G -> /Library/Application Support/ChickenBlocker/bin/cb-bash
-ssh -t user@mac-host 'sudo launchctl kickstart -k system/com.chickenblocker.verifier'
+sudo launchctl kickstart -k system/com.chickenblocker.verifier
 
 # 3. one-time Firefox profile install on the Mac (macOS 27 has no CLI for it):
 #    Finder -> Cmd+Shift+G -> /Library/Application Support/ChickenBlocker/expected
@@ -123,8 +182,9 @@ ssh -t user@mac-host 'sudo launchctl kickstart -k system/com.chickenblocker.veri
 #    System Settings -> General -> Device Management -> double-click the
 #    downloaded profile -> Install -> Install (admin password)
 
-# 4. push the rules from the Linux machine
-sync/sync-to-mac.sh user@mac-host
+# 4. Build and stage a signed rules release from the rule-source machine.
+sync/sync-to-mac.sh mdm-admin@10.11.133.222
+# Review and publish it at the appliance console as described above.
 ```
 
 Step 2 is required because macOS TCC blocks even root LaunchDaemons from
@@ -166,14 +226,12 @@ deadline (10 seconds in the canonical configuration). Accept macOS's
 notification authorization prompt after the first bundled-agent launch; the
 app then appears as **ChickenBlocker Breaks** in Notification settings.
 
-The first release intentionally leaves `allow_escape: true`. During a break,
-Escape dismisses only that current overlay and the screen identifies itself as
-test mode. Killing the user renderer is transient because launchd restarts it.
-Before installing, run `./tools/test-break-overlay.sh` for an unprivileged
-30-second multi-display test; it writes only to a temporary directory.
-After physical multi-display, sleep/wake, login, and night-boundary testing,
-change the canonical value to `false` and rerun `sudo ./install.sh`; the
-root verifier then keeps the enforced configuration in place.
+The deployed configuration has `allow_escape: false`; Escape cannot dismiss an
+active overlay. Killing the user renderer is transient because launchd restarts
+it. Before changing renderer behavior, use `./tools/test-break-overlay.sh` for
+an unprivileged 30-second multi-display test; it writes only to a temporary
+directory. Validate physical multi-display, sleep/wake, login, and night-boundary
+behavior before publishing renderer or schedule changes.
 
 Calendar/camera-aware meeting pauses and the Linux post-break Start-work gate
 are not part of this first port. They require separate macOS privacy and idle
@@ -185,16 +243,17 @@ Run on the Linux machine that has this repo checked out next to the
 `ChickenBlocker` repo (or set `CB_LINUX_REPO`):
 
 ```sh
-sync/sync-to-mac.sh user@mac-host    # extract + push + repair + audit
-sync/sync-to-mac.sh                  # extract only, into ./staged (gitignored)
+sync/sync-to-mac.sh                  # extract and build locally
+sync/sync-to-mac.sh mdm-admin@10.11.133.222  # also upload to appliance staging
 ```
 
 Extraction snapshots: LeechBlock settings (from Firefox's
 `storage-sync-v2.sqlite`), the live PKF keyword manifest, the signed `.xpi`,
 and the Linux repository's `userChrome.css`/`userContent.css`. Keyword words
 are printed as counts only and are never committed. The LeechBlock snapshot
-normalizes every populated set to always-blocked before it is staged; sync is
-still an explicit push and does not continuously poll the Linux machine.
+normalizes every populated set to always-blocked before it is staged. The
+script never connects to the protected Mac: appliance-root review/signing and
+the Mac's signature-verifying pull client are mandatory deployment boundaries.
 
 ## Verifier
 

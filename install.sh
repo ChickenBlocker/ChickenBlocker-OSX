@@ -3,9 +3,6 @@
 #
 # Usage:
 #   sudo ./install.sh              install on this Mac
-#   ./install.sh user@mac-host     push this checkout to the Mac over SSH and
-#                                  install it there (SSH is used ONLY when a
-#                                  target is given)
 #
 # What it installs (all root:wheel):
 #   /Library/Application Support/ChickenBlocker/verifier.sh          (0755)
@@ -15,8 +12,8 @@
 #   /Library/LaunchAgents/com.chickenblocker.breaks.plist
 #   /Library/Application Support/ChickenBlocker/agent/ChickenBlocker Breaks.app
 #
-# LeechBlock/keyword rules are NOT part of this step: they are pushed from
-# the Linux ChickenBlocker machine with sync/sync-to-mac.sh afterwards.
+# LeechBlock/keyword rules are NOT part of this step: they are deployed through
+# a separately reviewed signed release built by sync/sync-to-mac.sh.
 set -eu
 
 LABEL="com.chickenblocker.verifier"
@@ -186,8 +183,8 @@ install_local() {
     echo "    (ad-hoc signed copy; no other bash gets this grant)"
   fi
   echo
-  echo "Done. Rules are pushed from the Linux machine:"
-  echo "  ChickenBlocker-OSX/sync/sync-to-mac.sh user@mac-host"
+  echo "Done. Build rule updates as signed-release bundles with:"
+  echo "  ChickenBlocker-OSX/sync/sync-to-mac.sh"
 }
 
 case "${1:-}" in
@@ -201,15 +198,5 @@ case "${1:-}" in
     install_local
     ;;
   *)
-    TARGET="$1"
-    echo ">> Remote install to $TARGET over SSH"
-    ssh -o BatchMode=yes "$TARGET" true || die "cannot reach $TARGET over SSH (key-based login required)"
-    [ "$(ssh -o BatchMode=yes "$TARGET" 'uname -s')" = Darwin ] || die "$TARGET is not a Mac"
-    RT="/tmp/chickenblocker-osx-install"
-    echo ">> Copying files"
-    tar -cf - -C "$REPO" README.md install.sh uninstall.sh config daemon tools | \
-      ssh "$TARGET" "rm -rf '$RT' && mkdir -p '$RT' && tar -C '$RT' -xf -"
-    echo ">> Installing on $TARGET (sudo password may be asked)"
-    ssh -t "$TARGET" "sudo bash '$RT/install.sh' --local; rc=\$?; rm -rf '$RT'; exit \$rc"
-    ;;
+    die "remote install is disabled; stage a signed bundle with tools/stage-repository-release.sh"
 esac
