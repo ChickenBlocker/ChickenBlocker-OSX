@@ -12,14 +12,18 @@
 #   /Library/Application Support/ChickenBlocker/verifier.conf        (0644, kept if edited)
 #   /Library/Application Support/ChickenBlocker/expected/firefox-policies.json
 #   /Library/LaunchDaemons/com.chickenblocker.verifier.plist
+#   /Library/LaunchAgents/com.chickenblocker.breaks.plist
+#   /Library/Application Support/ChickenBlocker/agent/cb-break-overlay
 #
 # LeechBlock/keyword rules are NOT part of this step: they are pushed from
 # the Linux ChickenBlocker machine with sync/sync-to-mac.sh afterwards.
 set -eu
 
 LABEL="com.chickenblocker.verifier"
+BREAK_LABEL="com.chickenblocker.breaks"
 BASE="/Library/Application Support/ChickenBlocker"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
+BREAK_PLIST="/Library/LaunchAgents/$BREAK_LABEL.plist"
 REPO="$(cd "$(dirname "$0")" && pwd)"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -32,7 +36,8 @@ install_local() {
 
   echo ">> Installing verifier into $BASE"
   install -d -o root -g wheel -m 0755 \
-    "$BASE" "$BASE/expected" "$BASE/expected/extensions" "$BASE/extensions"
+    "$BASE" "$BASE/expected" "$BASE/expected/extensions" "$BASE/extensions" \
+    "$BASE/agent"
   install -m 0755 -o root -g wheel "$REPO/daemon/cb-verifier.sh" "$BASE/verifier.sh"
 
   echo ">> Building private interpreter $BASE/bin/cb-bash (FDA is granted to THIS binary only)"
@@ -46,6 +51,28 @@ install_local() {
     mv "$BASE/bin/cb-bash.new" "$BASE/bin/cb-bash"
   fi
   chmod 0700 "$BASE/bin/cb-bash"
+
+  echo ">> Building macOS break overlay"
+  command -v xcrun >/dev/null 2>&1 || die "xcrun is required (install Xcode Command Line Tools)"
+  xcrun swiftc -parse-as-library "$REPO/agent/cb-break-overlay.swift" \
+    -o "$BASE/expected/cb-break-overlay.new"
+  codesign --force --sign - "$BASE/expected/cb-break-overlay.new" >/dev/null 2>&1 || \
+    die "codesign failed for break overlay"
+  install -m 0755 -o root -g wheel "$BASE/expected/cb-break-overlay.new" \
+    "$BASE/expected/cb-break-overlay"
+  install -m 0755 -o root -g wheel "$BASE/expected/cb-break-overlay" \
+    "$BASE/agent/cb-break-overlay"
+  rm -f "$BASE/expected/cb-break-overlay.new"
+  install -m 0700 -o root -g wheel "$REPO/tools/break-scheduler.py" \
+    "$BASE/expected/break-scheduler.py"
+  install -m 0700 -o root -g wheel "$BASE/expected/break-scheduler.py" \
+    "$BASE/bin/break-scheduler.py"
+  install -m 0644 -o root -g wheel "$REPO/config/breaks.json" \
+    "$BASE/expected/breaks.json"
+  install -m 0644 -o root -g wheel "$BASE/expected/breaks.json" "$BASE/breaks.json"
+  install -m 0644 -o root -g wheel "$REPO/agent/$BREAK_LABEL.plist" \
+    "$BASE/expected/$BREAK_LABEL.plist"
+  install -m 0644 -o root -g wheel "$BASE/expected/$BREAK_LABEL.plist" "$BREAK_PLIST"
   if [ ! -f "$BASE/verifier.conf" ]; then
     printf 'CHECK_INTERVAL=15\nRESTART_FIREFOX_ON_REPAIR=1\nEXT_RESTART_MIN_INTERVAL=300\nSANTA_CHECKS=0\nSANTA_ENFORCE_SAFARI=0\nSANTA_LOCAL_RULE_FALLBACK=1\nSANTA_REINSTALL=0\n' > "$BASE/verifier.conf"
     chown root:wheel "$BASE/verifier.conf"
@@ -105,8 +132,15 @@ install_local() {
   launchctl print "system/$LABEL" >/dev/null 2>&1 || \
     die "LaunchDaemon did not load (bootstrap EIO); check: sudo launchctl print system/$LABEL"
 
+  console_uid="$(stat -f %u /dev/console 2>/dev/null || true)"
+  if [ -n "$console_uid" ] && [ "$console_uid" != 0 ]; then
+    launchctl bootout "gui/$console_uid/$BREAK_LABEL" 2>/dev/null || true
+    launchctl bootstrap "gui/$console_uid" "$BREAK_PLIST" 2>/dev/null || true
+    launchctl kickstart "gui/$console_uid/$BREAK_LABEL" 2>/dev/null || true
+  fi
+
   echo ">> Initial audit"
-  bash "$BASE/verifier.sh" check || true
+  "$BASE/bin/cb-bash" "$BASE/verifier.sh" check || true
 
   echo
   profile_user="${SUDO_USER:-$(stat -f %Su /dev/console 2>/dev/null || true)}"

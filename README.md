@@ -7,7 +7,7 @@ North Pole Security Santa tooling for an explicit Safari SigningID block rule.
 
 Phase 2 is deployed on the target macOS 27.0.1 Mac: Santa 2026.8.244 activation,
 local and static probe gates, profile rollback, the production Safari rule, and
-the 21-check verifier audit pass. The full post-reboot Safari launch-vector and
+the verifier audit pass. The full post-reboot Safari launch-vector and
 unrelated-WebKit application matrix remains to be recorded before declaring the
 entire acceptance plan complete. Fresh installs keep Safari enforcement off by
 default.
@@ -23,6 +23,7 @@ default.
 | Extension state — LeechBlock/PKF present and active in every Firefox profile | `<profile>/extensions.json`, repaired in place + `addonStartup` cache drop + controlled Firefox restart |
 | Firefox UI/content stylesheets synced from Linux | `<profile>/chrome/userChrome.css` and `userContent.css`; repaired for normal profiles |
 | Santa package, extension, mode, profile, Safari identity/rule/process state | Audited when `SANTA_CHECKS=1`; Safari is denied only when `SANTA_ENFORCE_SAFARI=1` |
+| Strict break schedule | Root-owned persisted scheduler plus a root-installed AppKit LaunchAgent covering every display |
 
 `BASE` is `/Library/Application Support/ChickenBlocker`.
 
@@ -83,11 +84,16 @@ while unhealthy, launch it normally after activation.
 ```text
 ChickenBlocker-OSX/
   config/firefox-policies.json        canonical macOS Firefox policies
+  config/breaks.json                  canonical strict break schedule
   config/santa-release.json           pinned Santa package provenance
   config/santa-rules.json             reviewed staged browser static rules
+  agent/cb-break-overlay.swift        native multi-display break renderer
+  agent/com.chickenblocker.breaks.plist
   daemon/cb-verifier.sh               check & repair service (bash)
   daemon/com.chickenblocker.verifier.plist
   tools/gen-firefox-profile.py        generates the .mobileconfig (and plist)
+  tools/break-scheduler.py             root-owned persisted schedule state machine
+  tools/test-break-overlay.sh          unprivileged 30-second renderer test
   tools/gen-santa-profile.py          deterministic production/probe/rollback profiles
   tools/fetch-santa.sh                downloads and verifies the pinned official PKG
   tools/santa-probe.c                 no-side-effect disposable execution probe
@@ -126,6 +132,39 @@ ad-hoc-signed `cb-bash` copy so no other shell gains anything. Step 3 is
 required because macOS 27 removed `profiles install`; the profile survives
 Firefox updates and only changes when `config/firefox-policies.json` does.
 
+## Strict break overlay
+
+The macOS port follows the Linux Safe Eyes split without running a GUI as
+root. The verifier owns the schedule, state, and command file as root. A
+root-installed Swift/AppKit binary runs in the console user's Aqua session and
+only renders that command. Its borderless `screenSaver`-level windows cover all
+displays and Spaces, with local time and battery/charging status in the
+top-right corner. The system LaunchAgent uses `KeepAlive`; the root verifier
+restores a booted-out or disabled agent and repairs changes to its binary,
+plist, scheduler, and configuration.
+
+The canonical schedule in `config/breaks.json` is:
+
+- 30 minutes of awake work followed by a strict 5-minute break,
+- a strict 30-minute break every fourth cycle,
+- one continuous night overlay from midnight until 08:00,
+- suspend time does not count as work; a sufficiently long sleep satisfies
+  the pending break,
+- no skip or postpone controls.
+
+The first release intentionally leaves `allow_escape: true`. During a break,
+Escape dismisses only that current overlay and the screen identifies itself as
+test mode. Killing the user renderer is transient because launchd restarts it.
+Before installing, run `./tools/test-break-overlay.sh` for an unprivileged
+30-second multi-display test; it writes only to a temporary directory.
+After physical multi-display, sleep/wake, login, and night-boundary testing,
+change the canonical value to `false` and rerun `sudo ./install.sh`; the
+root verifier then keeps the enforced configuration in place.
+
+Calendar/camera-aware meeting pauses and the Linux post-break Start-work gate
+are not part of this first port. They require separate macOS privacy and idle
+state design rather than silently inheriting Linux assumptions.
+
 ## Sync rules from the Linux machine
 
 Run on the Linux machine that has this repo checked out next to the
@@ -146,9 +185,9 @@ still an explicit push and does not continuously poll the Linux machine.
 ## Verifier
 
 ```sh
-sudo bash "$BASE/verifier.sh" check    # one-shot audit (exit 1 on FAIL)
-sudo bash "$BASE/verifier.sh" repair   # one repair pass
-sudo bash "$BASE/verifier.sh" daemon   # loop (what the LaunchDaemon runs)
+sudo "$BASE/bin/cb-bash" "$BASE/verifier.sh" check    # one-shot audit (exit 1 on FAIL)
+sudo "$BASE/bin/cb-bash" "$BASE/verifier.sh" repair   # one repair pass
+sudo "$BASE/bin/cb-bash" "$BASE/verifier.sh" daemon   # loop (what the LaunchDaemon runs)
 ```
 
 Checks run every `CHECK_INTERVAL` seconds (default 15). Missing, drifting,

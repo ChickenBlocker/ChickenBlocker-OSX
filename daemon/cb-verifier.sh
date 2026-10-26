@@ -1,5 +1,5 @@
 #!/bin/bash
-# ChickenBlocker-OSX verifier — Firefox policy + LeechBlock rule check & repair.
+# ChickenBlocker-OSX verifier — browser-policy repair and strict-break scheduler.
 #
 # Modes:
 #   daemon  check and repair forever (used by the LaunchDaemon)
@@ -82,6 +82,14 @@ SANTA_RECEIPT_VERSION="2026.8.244"
 SANTA_TEAM_ID="ZMCG7MLDV9"
 SANTA_RECEIPT_ID="com.northpolesec.santa"
 SANTA_EXTENSION_ID="com.northpolesec.santa.daemon"
+BREAK_LABEL="com.chickenblocker.breaks"
+BREAK_PLIST="/Library/LaunchAgents/$BREAK_LABEL.plist"
+BREAK_CONFIG="$BASE/breaks.json"
+BREAK_SCHEDULER="$BASE/bin/break-scheduler.py"
+BREAK_AGENT="$BASE/agent/cb-break-overlay"
+BREAK_STATE="$BASE/break-state.json"
+BREAK_COMMAND="$BASE/break-command.json"
+BREAK_REPAIRED=0
 
 log() {
   printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOGFILE" 2>/dev/null || true
@@ -580,6 +588,7 @@ do_check() {
   managed="$4"
   owner="${5:-root:wheel}"
   restart="${6:-0}"
+  expected_mode="${7:-644}"
 
   if [ ! -f "$src" ]; then
     SKIP=$((SKIP+1))
@@ -593,7 +602,7 @@ do_check() {
   elif ! cmp -s "$src" "$dst"; then
     problem="content drift"
   elif [ "$(stat -f '%Su:%Sg' "$dst" 2>/dev/null)" != "$owner" ] ||
-       [ "$(stat -f '%Lp' "$dst" 2>/dev/null)" != "644" ]; then
+       [ "$(stat -f '%Lp' "$dst" 2>/dev/null)" != "$expected_mode" ]; then
     problem="owner/mode"
   fi
 
@@ -610,16 +619,83 @@ do_check() {
   fi
 
   mkdir -p "$(dirname "$dst")"
-  if cp "$src" "$dst.cb-new" && chmod 0644 "$dst.cb-new" &&
+  if cp "$src" "$dst.cb-new" && chmod "$expected_mode" "$dst.cb-new" &&
      chown "$owner" "$dst.cb-new" && mv "$dst.cb-new" "$dst"; then
     REPAIRED=$((REPAIRED+1))
     [ "$managed" = 1 ] && REPAIRED_MANAGED=1
     [ "$restart" = 1 ] && REPAIRED_RESTART=1
+    case "$label" in break-*) BREAK_REPAIRED=1 ;; esac
     log "REPAIRED $label ($problem): $dst"
   else
     rm -f "$dst.cb-new"
     FAIL=$((FAIL+1))
     log "REPAIR-FAILED $label ($problem): $dst"
+  fi
+}
+
+check_break_components() {
+  do_check "break-config" "$EXPECTED/breaks.json" "$BREAK_CONFIG" 0
+  do_check "break-scheduler" "$EXPECTED/break-scheduler.py" \
+    "$BREAK_SCHEDULER" 0 root:wheel 0 700
+  do_check "break-agent" "$EXPECTED/cb-break-overlay" \
+    "$BREAK_AGENT" 0 root:wheel 0 755
+  do_check "break-launchagent" "$EXPECTED/$BREAK_LABEL.plist" \
+    "$BREAK_PLIST" 0
+
+  if [ "$MODE" = check ]; then
+    if [ -x "$BREAK_SCHEDULER" ] && [ -r "$BREAK_CONFIG" ] &&
+       python3 "$BREAK_SCHEDULER" --config "$BREAK_CONFIG" \
+         --state "$BREAK_STATE" --command "$BREAK_COMMAND" --check; then
+      audit_pass "break-config-schema" "$BREAK_CONFIG"
+    else
+      audit_fail "break-config-schema" "invalid or scheduler unavailable"
+    fi
+    resolve_console_user
+    if [ "$(id -u)" != 0 ]; then
+      audit_skip "break-agent-state" "needs root (sudo)"
+    elif [ -z "$CONSOLE_UID" ] || [ "$CONSOLE_UID" = 0 ]; then
+      audit_skip "break-agent-state" "no GUI console user"
+    elif launchctl print "gui/$CONSOLE_UID/$BREAK_LABEL" >/dev/null 2>&1 &&
+         pgrep -u "$CONSOLE_UID" -f "^$BREAK_AGENT$" >/dev/null 2>&1; then
+      audit_pass "break-agent-state" "loaded for $CONSOLE_USER"
+    else
+      audit_fail "break-agent-state" "not loaded for $CONSOLE_USER"
+    fi
+  fi
+}
+
+run_break_scheduler() {
+  if [ ! -x "$BREAK_SCHEDULER" ] || [ ! -r "$BREAK_CONFIG" ]; then
+    warn_limited "break-scheduler" "scheduler or config is missing"
+    return
+  fi
+  if ! python3 "$BREAK_SCHEDULER" --config "$BREAK_CONFIG" \
+       --state "$BREAK_STATE" --command "$BREAK_COMMAND"; then
+    warn_limited "break-scheduler" "schedule update failed"
+  fi
+}
+
+ensure_break_agent() {
+  resolve_console_user
+  [ -n "$CONSOLE_UID" ] && [ "$CONSOLE_UID" != 0 ] || return
+  domain="gui/$CONSOLE_UID"
+  if ! launchctl print "$domain/$BREAK_LABEL" >/dev/null 2>&1; then
+    launchctl enable "$domain/$BREAK_LABEL" >/dev/null 2>&1 || true
+    launchctl bootstrap "$domain" "$BREAK_PLIST" >/dev/null 2>&1 || true
+  fi
+  if [ "$BREAK_REPAIRED" = 1 ]; then
+    launchctl kickstart -k "$domain/$BREAK_LABEL" >/dev/null 2>&1 || true
+  fi
+  agent_running=0
+  for pid in $(pgrep -u "$CONSOLE_UID" -f "^$BREAK_AGENT$" 2>/dev/null || true); do
+    kill -CONT "$pid" >/dev/null 2>&1 || true
+    agent_running=1
+  done
+  if [ "$agent_running" = 0 ]; then
+    launchctl kickstart -k "$domain/$BREAK_LABEL" >/dev/null 2>&1 || true
+  fi
+  if ! launchctl print "$domain/$BREAK_LABEL" >/dev/null 2>&1; then
+    warn_limited "break-agent" "LaunchAgent is not loaded for $CONSOLE_USER"
   fi
 }
 
@@ -727,6 +803,7 @@ run_pass() {
   PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; REPAIRED_RESTART=0
   FIREFOX_POLICY_RESTART=0; FIREFOX_POLICY_HEALTHY=0; EXT_DRIFT_PROFILES=""
   SANTA_PROFILE_STATE="unchecked"; SANTA_STATIC_COUNT=""; SANTA_HEALTHY=0; SAFARI_EXE=""; SAFARI_PIDS=""
+  BREAK_REPAIRED=0
 
   check_firefox_policy_channel
 
@@ -749,6 +826,7 @@ run_pass() {
   check_extension_state
   check_profile_stylesheets
   check_santa
+  check_break_components
 
   if [ "$MODE" = check ]; then
     if [ -f "$PLIST" ]; then
@@ -784,6 +862,8 @@ recovery() {
 
   repair_santa_fallback
   terminate_verified_safari
+  run_break_scheduler
+  ensure_break_agent
 
   policy_blocked=0
   if [ "$FIREFOX_POLICY_HEALTHY" != 1 ]; then

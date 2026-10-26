@@ -1,6 +1,6 @@
 #!/bin/bash
 # ChickenBlocker-OSX uninstall — stop the verifier and remove every deployed
-# file (daemon, expected files, Firefox policies, managed-storage manifests).
+# file (daemon, break overlay, expected files, policies, managed manifests).
 #
 # Usage:
 #   sudo ./uninstall.sh              uninstall on this Mac
@@ -9,8 +9,10 @@
 set -eu
 
 LABEL="com.chickenblocker.verifier"
+BREAK_LABEL="com.chickenblocker.breaks"
 BASE="/Library/Application Support/ChickenBlocker"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
+BREAK_PLIST="/Library/LaunchAgents/$BREAK_LABEL.plist"
 MS_DIR="/Library/Application Support/Mozilla/ManagedStorage"
 REPO="$(cd "$(dirname "$0")" && pwd)"
 
@@ -25,6 +27,14 @@ uninstall_local() {
   echo ">> Stopping daemon"
   launchctl bootout "system/$LABEL" 2>/dev/null || true
   rm -f "$PLIST"
+
+  echo ">> Stopping break overlay"
+  console_uid="$(stat -f %u /dev/console 2>/dev/null || true)"
+  if [ -n "$console_uid" ] && [ "$console_uid" != 0 ]; then
+    launchctl bootout "gui/$console_uid/$BREAK_LABEL" 2>/dev/null || true
+  fi
+  pkill -f "$BASE/agent/cb-break-overlay" 2>/dev/null || true
+  rm -f "$BREAK_PLIST"
 
   echo ">> Removing Firefox managed preferences"
   rm -f "/Library/Managed Preferences/org.mozilla.firefox.plist"

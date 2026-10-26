@@ -1,0 +1,21 @@
+{
+  "enabled": true,
+  "allow_escape": true,
+  "work_seconds": 1800,
+  "short_break_seconds": 300,
+  "long_break_seconds": 1800,
+  "long_break_every": 4,
+  "night_start_hour": 0,
+  "night_end_hour": 8,
+  "suspend_gap_seconds": 45,
+  "short_messages": [
+    "Rest your eyes and focus on something far away.",
+    "Relax your shoulders and take five slow breaths.",
+    "Stand up, stretch, and have some water."
+  ],
+  "long_messages": [
+    "Step away from the screen and take a proper break.",
+    "Walk around and stretch your back and legs."
+  ],
+  "night_message": "It is night. Rest until morning."
+}
