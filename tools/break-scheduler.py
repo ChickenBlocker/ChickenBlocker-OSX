@@ -174,12 +174,13 @@ def advance(
     suspended = phase == "work" and gap > config["suspend_gap_seconds"]
     if suspended:
         remaining = int(state["deadline"]) - last_tick
-        if remaining > gap:
+        if remaining > gap or state.get("sleep_advanced_cycle", False):
             state["deadline"] = int(state["deadline"]) + gap
         else:
             state["cycle"] = (state["cycle"] + 1) % config["long_break_every"]
             state["deadline"] = now + config["work_seconds"]
             state["work_started"] = now
+            state["sleep_advanced_cycle"] = True
 
     if phase == "work" and not suspended:
         is_away = idle_seconds is not None and idle_seconds >= config["idle_away_seconds"]
@@ -202,6 +203,7 @@ def advance(
             }
         else:
             state["away"] = False
+            state.pop("sleep_advanced_cycle", None)
     elif phase == "work":
         # Suspend handling above already accounts for this gap. Remember the
         # HID state so the same idle interval is not added again next tick.
@@ -223,6 +225,7 @@ def advance(
         if gap > config["suspend_gap_seconds"]:
             state = fresh_state(config, now)
             state["cycle"] = next_cycle
+            state["sleep_advanced_cycle"] = True
         else:
             state = {
                 "phase": "gate",

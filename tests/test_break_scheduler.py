@@ -181,6 +181,41 @@ class BreakSchedulerTests(unittest.TestCase):
         self.assertEqual(state["deadline"], now + 1800)
         self.assertEqual(command["mode"], "work")
 
+    def test_one_sleep_cannot_skip_multiple_break_cycles(self):
+        now = epoch(10)
+        state = {
+            "phase": "work", "deadline": now - 60, "cycle": 0,
+            "last_tick": now - 600, "night": False,
+        }
+        state, _ = SCHEDULER.advance(self.config, state, now, idle_seconds=600)
+        self.assertEqual(state["cycle"], 1)
+
+        later = now + 2400
+        state, _ = SCHEDULER.advance(self.config, state, later, idle_seconds=3000)
+        self.assertEqual(state["cycle"], 1)
+        self.assertEqual(state["deadline"], later + 1800)
+
+        awake = later + 15
+        state, _ = SCHEDULER.advance(self.config, state, awake, idle_seconds=0)
+        next_sleep = awake + 2400
+        state["deadline"] = awake + 300
+        state, _ = SCHEDULER.advance(self.config, state, next_sleep, idle_seconds=2400)
+        self.assertEqual(state["cycle"], 2)
+
+    def test_sleep_that_finishes_break_cannot_skip_next_cycle(self):
+        now = epoch(10)
+        state = {
+            "phase": "break", "break_type": "long", "deadline": now - 60,
+            "cycle": 3, "last_tick": now - 600, "night": False,
+        }
+        state, _ = SCHEDULER.advance(self.config, state, now, idle_seconds=600)
+        self.assertEqual(state["cycle"], 0)
+
+        later = now + 2400
+        state, _ = SCHEDULER.advance(self.config, state, later, idle_seconds=3000)
+        self.assertEqual(state["cycle"], 0)
+        self.assertEqual(state["deadline"], later + 1800)
+
     def test_short_suspend_pauses_work_countdown(self):
         now = epoch(10)
         state = {
