@@ -6,6 +6,8 @@
   "long_break_seconds": 1800,
   "long_break_every": 4,
   "warning_seconds": 10,
+  "idle_away_seconds": 180,
+  "idle_gate_reset_seconds": 1800,
   "night_start_hour": 0,
   "night_end_hour": 8,
   "suspend_gap_seconds": 45,
@@ -18,5 +20,7 @@
     "Step away from the screen and take a proper break.",
     "Walk around and stretch your back and legs."
   ],
+  "start_work_message": "Break is over. Press Start to begin your next work session.",
+  "away_message": "You were away. Press Start to continue your work session.",
   "night_message": "It is night. Rest until morning."
 }

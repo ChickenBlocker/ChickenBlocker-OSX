@@ -45,11 +45,15 @@ class BreakSchedulerTests(unittest.TestCase):
             "long_break_seconds": 1800,
             "long_break_every": 4,
             "warning_seconds": 10,
+            "idle_away_seconds": 180,
+            "idle_gate_reset_seconds": 1800,
             "night_start_hour": 0,
             "night_end_hour": 8,
             "suspend_gap_seconds": 45,
             "short_messages": ["short"],
             "long_messages": ["long"],
+            "start_work_message": "start",
+            "away_message": "away",
             "night_message": "night",
         }
 
@@ -134,15 +138,28 @@ class BreakSchedulerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "warning_seconds"):
             SCHEDULER.advance(self.config, None, epoch(9))
 
-    def test_completed_break_advances_cycle_and_starts_work(self):
+    def test_completed_break_advances_cycle_and_waits_for_start(self):
         now = epoch(9)
         state = {
             "phase": "break", "break_type": "short", "deadline": now,
             "cycle": 0, "last_tick": now - 15, "night": False,
         }
         state, command = SCHEDULER.advance(self.config, state, now)
+        self.assertEqual(state["phase"], "gate")
+        self.assertEqual(state["cycle"], 1)
+        self.assertEqual(command["mode"], "gate")
+        self.assertEqual(command["message"], "start")
+
+    def test_sleep_that_finishes_break_skips_start_gate(self):
+        now = epoch(9)
+        state = {
+            "phase": "break", "break_type": "short", "deadline": now - 60,
+            "cycle": 0, "last_tick": now - 600, "night": False,
+        }
+        state, command = SCHEDULER.advance(self.config, state, now)
         self.assertEqual(state["phase"], "work")
         self.assertEqual(state["cycle"], 1)
+        self.assertEqual(state["deadline"], now + 1800)
         self.assertEqual(command["mode"], "work")
 
     def test_night_always_imposes_until_morning(self):
@@ -172,6 +189,80 @@ class BreakSchedulerTests(unittest.TestCase):
         }
         state, _ = SCHEDULER.advance(self.config, state, now)
         self.assertEqual(state["deadline"], now + 1200)
+
+    def test_idle_threshold_reclassifies_idle_time_as_away(self):
+        now = epoch(10)
+        state = {
+            "phase": "work", "deadline": now + 600, "cycle": 0,
+            "last_tick": now - 15, "work_started": now - 900,
+            "away": False, "night": False,
+        }
+        state, command = SCHEDULER.advance(self.config, state, now, idle_seconds=300)
+        self.assertEqual(state["phase"], "gate")
+        self.assertEqual(state["work_remaining"], 900)
+        self.assertEqual(command["mode"], "gate")
+        self.assertEqual(command["message"], "away")
+
+    def test_work_countdown_stays_paused_at_away_gate(self):
+        now = epoch(10)
+        state = {
+            "phase": "gate", "gate_reason": "away", "gate_started": now - 15,
+            "work_remaining": 600, "cycle": 0, "last_tick": now - 15,
+            "away": False, "night": False,
+        }
+        state, command = SCHEDULER.advance(self.config, state, now, idle_seconds=0)
+        self.assertEqual(state["phase"], "gate")
+        self.assertEqual(state["work_remaining"], 600)
+        self.assertEqual(command["mode"], "gate")
+
+    def test_start_button_resumes_preserved_work_countdown(self):
+        now = epoch(10)
+        state = {
+            "phase": "gate", "gate_reason": "away", "gate_started": now - 15,
+            "work_remaining": 600, "cycle": 0, "last_tick": now - 15,
+            "away": False, "night": False,
+        }
+        state, command = SCHEDULER.advance(self.config, state, now, start_work=True)
+        self.assertEqual(state["phase"], "work")
+        self.assertEqual(state["deadline"], now + 600)
+        self.assertEqual(command["mode"], "work")
+
+    def test_long_start_gate_resets_to_full_work_interval(self):
+        now = epoch(10)
+        state = {
+            "phase": "gate", "gate_reason": "away", "gate_started": now - 1800,
+            "work_remaining": 300, "cycle": 0, "last_tick": now - 15,
+            "away": False, "night": False,
+        }
+        state, _ = SCHEDULER.advance(self.config, state, now, start_work=True)
+        self.assertEqual(state["deadline"], now + 1800)
+
+    def test_secure_start_work_request_is_consumed(self):
+        now = epoch(9)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "request.json"
+            path.write_text(json.dumps({"action": "start_work", "requested_at": now}))
+            path.chmod(0o600)
+            self.assertEqual(
+                SCHEDULER.consume_request(now, path, os.getuid()), "start_work"
+            )
+            self.assertFalse(path.exists())
+
+    def test_suspend_and_hid_idle_are_not_counted_twice(self):
+        now = epoch(10)
+        state = {
+            "phase": "work", "deadline": now + 900, "cycle": 0,
+            "last_tick": now - 600, "work_started": now - 900,
+            "away": False, "night": False,
+        }
+        state, command = SCHEDULER.advance(self.config, state, now, idle_seconds=600)
+        self.assertEqual(state["deadline"], now + 1500)
+        self.assertTrue(command["away"])
+
+    def test_idle_away_time_must_be_positive(self):
+        self.config["idle_away_seconds"] = 0
+        with self.assertRaisesRegex(ValueError, "idle_away_seconds"):
+            SCHEDULER.advance(self.config, None, epoch(9))
 
 
 if __name__ == "__main__":

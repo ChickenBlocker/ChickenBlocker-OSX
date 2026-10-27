@@ -21,9 +21,10 @@ private struct BreakCommand: Decodable {
     let totalIntervals: Int?
     let warningSeconds: Int?
     let nextBreakKind: String?
+    let away: Bool?
 
     private enum CodingKeys: String, CodingKey {
-        case mode, until, kind, message, interval
+        case mode, until, kind, message, interval, away
         case allowEscape = "allow_escape"
         case totalIntervals = "total_intervals"
         case warningSeconds = "warning_seconds"
@@ -35,8 +36,10 @@ private struct BreakCommand: Decodable {
 private final class OverlayViewController: NSViewController {
     private let messageLabel = NSTextField(labelWithString: "")
     private let countdownLabel = NSTextField(labelWithString: "")
+    private let startButton = NSButton(title: "Start work", target: nil, action: nil)
     private let escapeLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
+    var onStartWork: (() -> Void)?
 
     override func loadView() {
         let root = NSView()
@@ -53,6 +56,14 @@ private final class OverlayViewController: NSViewController {
         countdownLabel.font = .monospacedDigitSystemFont(ofSize: 64, weight: .medium)
         countdownLabel.textColor = NSColor(calibratedWhite: 0.75, alpha: 1)
 
+        startButton.target = self
+        startButton.action = #selector(startWork)
+        startButton.bezelStyle = .rounded
+        startButton.controlSize = .large
+        startButton.font = .systemFont(ofSize: 20, weight: .medium)
+        startButton.keyEquivalent = "\r"
+        startButton.isHidden = true
+
         escapeLabel.alignment = .center
         escapeLabel.font = .systemFont(ofSize: 16)
         escapeLabel.textColor = NSColor(calibratedWhite: 0.5, alpha: 1)
@@ -63,7 +74,7 @@ private final class OverlayViewController: NSViewController {
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(statusLabel)
 
-        let stack = NSStackView(views: [messageLabel, countdownLabel, escapeLabel])
+        let stack = NSStackView(views: [messageLabel, countdownLabel, startButton, escapeLabel])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 32
@@ -86,12 +97,22 @@ private final class OverlayViewController: NSViewController {
         messageLabel.stringValue = scheduleOverdue
             ? "Break schedule is overdue. Waiting for the scheduler."
             : command.message
-        let remaining = max(0, Int(ceil(command.until - now)))
-        countdownLabel.stringValue = String(
-            format: "%02d:%02d:%02d", remaining / 3600, (remaining / 60) % 60, remaining % 60
-        )
+        if command.mode == "gate" {
+            countdownLabel.stringValue = ""
+            startButton.isHidden = false
+        } else {
+            let remaining = max(0, Int(ceil(command.until - now)))
+            countdownLabel.stringValue = String(
+                format: "%02d:%02d:%02d", remaining / 3600, (remaining / 60) % 60, remaining % 60
+            )
+            startButton.isHidden = true
+        }
         escapeLabel.stringValue = command.allowEscape ? "TEST MODE - press Escape to dismiss this break" : ""
         statusLabel.stringValue = status
+    }
+
+    @objc private func startWork() {
+        onStartWork?()
     }
 }
 
@@ -116,6 +137,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         title: "Take a break now", action: #selector(requestBreakNow), keyEquivalent: ""
     )
     private var requestPendingAt: TimeInterval?
+    private var startRequestPendingAt: TimeInterval?
     private var notifiedDeadline: TimeInterval?
     private let warningNotificationID = "com.chickenblocker.break-warning"
     private let dateFormatter: DateFormatter = {
@@ -172,10 +194,25 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
     @objc private func requestBreakNow() {
         let now = Date().timeIntervalSince1970
         guard currentCommand?.mode == "work" else { return }
-        let payload: [String: Any] = ["action": "take_break", "requested_at": Int(now)]
+        guard writeRequest(action: "take_break", now: now) else { return }
+        requestPendingAt = now
+        scheduleItem.title = "Break requested"
+        takeBreakItem.isEnabled = false
+    }
+
+    private func requestStartWork() {
+        let now = Date().timeIntervalSince1970
+        guard currentCommand?.mode == "gate" else { return }
+        guard writeRequest(action: "start_work", now: now) else { return }
+        startRequestPendingAt = now
+        hideOverlay()
+    }
+
+    private func writeRequest(action: String, now: TimeInterval) -> Bool {
+        let payload: [String: Any] = ["action": action, "requested_at": Int(now)]
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
-            scheduleItem.title = "Could not request break"
-            return
+            scheduleItem.title = "Could not send request"
+            return false
         }
         let temporaryURL = requestURL.deletingLastPathComponent().appendingPathComponent(
             ".\(requestURL.lastPathComponent).\(UUID().uuidString)"
@@ -184,12 +221,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         guard FileManager.default.createFile(
             atPath: temporaryURL.path, contents: data, attributes: [.posixPermissions: 0o600]
         ), rename(temporaryURL.path, requestURL.path) == 0 else {
-            scheduleItem.title = "Could not request break"
-            return
+            scheduleItem.title = "Could not send request"
+            return false
         }
-        requestPendingAt = now
-        scheduleItem.title = "Break requested"
-        takeBreakItem.isEnabled = false
+        return true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -233,6 +268,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
 
         for screen in NSScreen.screens {
             let controller = OverlayViewController()
+            controller.onStartWork = { [weak self] in self?.requestStartWork() }
             let window = OverlayWindow(
                 contentRect: screen.frame,
                 styleMask: .borderless,
@@ -266,15 +302,28 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
             return
         }
         currentCommand = command
+        if command.mode != "gate" {
+            startRequestPendingAt = nil
+        }
         updateStatusMenu(command: command, now: now)
         updateBreakWarning(command: command, now: now)
-        let scheduleOverdue = command.mode == "work" && command.until <= now
-        guard scheduleOverdue || (command.mode == "break" && command.until > now) else {
+        if command.mode == "gate", let pendingAt = startRequestPendingAt, now - pendingAt < 30 {
+            hideOverlay()
+            return
+        }
+        if command.away == true {
             dismissedUntil = 0
             hideOverlay()
             return
         }
-        if dismissedUntil >= command.until {
+        let scheduleOverdue = command.mode == "work" && command.until <= now
+        guard command.mode == "gate" || scheduleOverdue
+                || (command.mode == "break" && command.until > now) else {
+            dismissedUntil = 0
+            hideOverlay()
+            return
+        }
+        if command.mode != "gate", dismissedUntil >= command.until {
             hideOverlay()
             return
         }
@@ -290,7 +339,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         }
         windows.forEach { $0.makeKeyAndOrderFront(nil) }
         NSApp.activate(ignoringOtherApps: true)
-        if !cursorHidden {
+        if command.mode == "gate", cursorHidden {
+            NSCursor.unhide()
+            cursorHidden = false
+        } else if command.mode != "gate", !cursorHidden {
             NSCursor.hide()
             cursorHidden = true
         }
@@ -302,6 +354,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
             intervalItem.isHidden = false
         } else {
             intervalItem.isHidden = true
+        }
+        if command.away == true {
+            scheduleItem.title = "Away - work timer paused"
+            takeBreakItem.isEnabled = false
+            requestPendingAt = nil
+            return
+        }
+        if command.mode == "gate" {
+            scheduleItem.title = "Waiting for Start work"
+            takeBreakItem.isEnabled = false
+            requestPendingAt = nil
+            return
         }
         if command.mode == "break", command.until > now {
             scheduleItem.title = "Break in progress"
@@ -328,7 +392,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
     }
 
     private func updateBreakWarning(command: BreakCommand, now: TimeInterval) {
-        guard command.mode == "work", command.until > now else {
+        guard command.mode == "work", command.until > now, command.away != true else {
             clearBreakWarning()
             notifiedDeadline = nil
             return

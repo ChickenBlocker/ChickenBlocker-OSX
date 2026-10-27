@@ -209,6 +209,8 @@ The canonical schedule in `config/breaks.json` is:
 - 30 minutes of awake work followed by a strict 5-minute break,
 - a strict 30-minute break every fourth cycle,
 - one continuous night overlay from midnight until 08:00,
+- after 3 minutes without keyboard, mouse, or trackpad input, a Start-work gate
+  pauses the timer until explicitly resumed,
 - suspend time does not count as work; a sufficiently long sleep satisfies
   the pending break,
 - no skip or postpone controls.
@@ -225,6 +227,12 @@ the upcoming short or long break `warning_seconds` before its root-owned
 deadline (10 seconds in the canonical configuration). Accept macOS's
 notification authorization prompt after the first bundled-agent launch; the
 app then appears as **ChickenBlocker Breaks** in Notification settings.
+
+As in the Linux Safe Eyes integration, a fullscreen **Start work** button is
+shown after every completed daytime break and after the idle-away threshold.
+A short away period preserves the work time that remained; a gate held for 30
+minutes starts a fresh work interval. Strict breaks still expose no Skip or
+Postpone controls.
 
 The deployed configuration has `allow_escape: false`; Escape cannot dismiss an
 active overlay. Killing the user renderer is transient because launchd restarts
