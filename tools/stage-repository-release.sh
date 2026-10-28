@@ -13,7 +13,7 @@ REMOTE_PATH=chickenblocker-release-staging/repository
 
 if [[ -z $APPLIANCE ]]; then
   echo "Repository release staged locally: $OUTPUT"
-  echo "Upload with: $0 mdm-admin@10.11.133.222"
+  echo "Upload with: $0 appliance-admin@10.11.133.222"
   exit 0
 fi
 
@@ -23,4 +23,4 @@ tar -C "$OUTPUT" -cf - . | ssh -o BatchMode=yes "$APPLIANCE" \
   'tar -C "$HOME/chickenblocker-release-staging/repository" -xf -'
 echo "Repository release staged on $APPLIANCE:$REMOTE_PATH"
 echo "Review it, then publish an explicit next sequence from the appliance console:"
-echo "  cb-publish-release --bundle /home/mdm-admin/$REMOTE_PATH --sequence N"
+echo "  cb-publish-release --bundle /home/appliance-admin/$REMOTE_PATH --sequence N"

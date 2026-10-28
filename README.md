@@ -113,12 +113,12 @@ ChickenBlocker-OSX/
 
 ## Signed appliance releases
 
-The optional offline admin appliance replaces the nonfunctional push-less MDM
-deployment path. Its signing private key never leaves the appliance. The Mac
-stores only the public key and polls a read-only HTTP service over ZeroTier;
-every canonical manifest is signature-checked, every payload is hash-checked,
-and lower release sequences are rejected. Existing policy remains active while
-the appliance is off.
+The optional offline admin appliance provides a narrow signed pull channel.
+Its signing private key never leaves the appliance. The Mac stores only the
+public key and polls a read-only HTTP service over ZeroTier; every canonical
+manifest is signature-checked, every payload is hash-checked, and lower release
+sequences are rejected. Existing policy remains active while the appliance is
+off.
 
 On the Debian appliance, with this repository staged at
 `/tmp/ChickenBlocker-OSX`:
@@ -148,21 +148,17 @@ unprivileged staging bundle, review it on the appliance, then publish it with an
 explicit next sequence from the appliance console:
 
 ```sh
-./tools/stage-repository-release.sh mdm-admin@10.11.133.222
+./tools/stage-repository-release.sh appliance-admin@10.11.133.222
 
 # On the appliance console as root, after reviewing the staged files:
 cb-publish-release \
-  --bundle /home/mdm-admin/chickenblocker-release-staging/repository \
+  --bundle /home/appliance-admin/chickenblocker-release-staging/repository \
   --sequence N
 ```
 
 The protected Mac verifies the manifest signature and payload before invoking
 the fixed bundle installer. The release client runs the independent verifier
 audit before recording the sequence as accepted.
-
-Do not remove MicroMDM or rotate the temporary `svc-admin` password until both
-smoke releases, invalid-signature/rollback tests, reboot behavior, and
-appliance-off enforcement have passed.
 
 ## Install (fresh Mac)
 
@@ -183,7 +179,7 @@ sudo launchctl kickstart -k system/com.chickenblocker.verifier
 #    downloaded profile -> Install -> Install (admin password)
 
 # 4. Build and stage a signed rules release from the rule-source machine.
-sync/sync-to-mac.sh mdm-admin@10.11.133.222
+sync/sync-to-mac.sh appliance-admin@10.11.133.222
 # Review and publish it at the appliance console as described above.
 ```
 
@@ -192,6 +188,94 @@ reading browser profile data (`extensions.json`); the grant is scoped to the
 ad-hoc-signed `cb-bash` copy so no other shell gains anything. Step 3 is
 required because macOS 27 removed `profiles install`; the profile survives
 Firefox updates and only changes when `config/firefox-policies.json` does.
+
+### svc-admin is temporary
+
+`svc-admin` exists only to bootstrap and approve the pieces above. Once setup
+settles it is disabled or deleted, and the signed pull channel becomes the
+only privileged change path. Before that happens, every manual grant that
+needs administrator approval must be provisioned, because a lost grant cannot
+be repaired locally once no administrator exists. In particular, gate the
+Accessibility grant for the user-session helper:
+
+```sh
+./tools/test-accessibility-grant.sh          # full gate; needs svc-admin once
+./tools/test-accessibility-grant.sh --verify # reusable later; no admin needed
+```
+
+The gate installs a probe app in `~/Applications` and proves that the
+Accessibility grant works from the console user's session and survives a
+rebuild signed with the same identity. macOS 27 also retained the grant across
+an observed ad-hoc rebuild, but that may be TCC caching or looser matching and
+is not a durable identity guarantee. Create a stable self-signed identity once
+(Keychain Access → Certificate Assistant → Create Certificate → Identity
+Type: Self Signed Root, Certificate Type: Code Signing), keep its private key,
+and verify again after reboot. Only after that gate passes should `svc-admin`
+be removed or made unavailable.
+
+### Accessibility profile transaction prototype (macOS 27)
+
+The experimental helper in `agent/cb-ax-probe.swift` proves that a stably
+signed user-session app can supervise the local configuration-profile UI. On
+macOS 27 the TCC grant formerly named Accessibility appears under Privacy &
+Security as **Device Control and Data Access**. Configuration profiles remain
+under General → Device Management.
+
+The observed removal flow is Device Management `-` → a confirmation sheet →
+one combined `SecurityAgent` window containing administrator name, password,
+Allow Access, and Don't Allow. The helper can identify profile detail sheets
+by payload identifier, identify removal confirmations structurally by their
+destructive button, cancel non-allowlisted operations, and terminate any
+unarmed SecurityAgent window. Restarting System Settings with a verified new
+PID clears the authorization state retained by that Settings process.
+
+Synthetic authorization was proven with a user-supplied svc-admin credential:
+the helper first observes the exact allowlisted removal confirmation, verifies
+Apple's SecurityAgent and a settled on-screen window, types `svc-admin` into
+the focused username field, tabs to the secure password field, emits the
+password one character per global HID event, and presses Allow Access. Bulk
+Unicode injection, PID-targeted events, and injection before the window had
+settled did not work. The successful test verified that the disposable profile
+was removed and then restarted Settings.
+
+The test credential is accepted through a clearly labelled hidden dialog and
+transferred through a mode-0600 FIFO. It is not placed in command arguments,
+environment variables, the clipboard, a regular file, or logs. Production
+must replace svc-admin with a random one-time administrator created and
+revoked by the root service; this prototype is not permission to retain a
+standing administrator password in the user-session helper.
+
+Repeat the mechanism tests with:
+
+```sh
+./tools/test-accessibility-grant.sh
+./tools/test-pane-guard.sh
+CB_TEST_BLOCKED_REMOVAL=1 ./tools/test-allowed-profile-removal.sh
+./tools/test-allowed-profile-removal.sh
+./tools/test-accessibility-auth-input.sh
+./tools/test-accessibility-profile-install.sh
+./tools/test-accessibility-profile-install.sh --cleanup-only
+```
+
+The profile install test defaults to the two disposable `.mobileconfig`
+fixtures under `tests/fixtures/`, or accepts initial and updated file paths as
+its two arguments. Both files must have the same identifier, name, and stable
+UUIDs; the update must increment `PayloadVersion`.
+The helper opens the exact initial fixture, finds its Downloaded row by the
+profile name plus `Profile not installed`, double-clicks it, and verifies its
+display name and identifier before pressing Install. It repeats that flow with
+the second fixture and drives Update/Replace. Before each transaction it uses
+the Device Management minus button to remove a stale downloaded copy; macOS
+does not expose a CLI for deleting a merely downloaded, not-installed profile.
+The test verifies each UUID with
+`system_profiler SPConfigurationProfileDataType -json`. A password prompt is
+optional: System Settings remembers a successful authorization for a period,
+so a missing SecurityAgent window is reported as cached authorization, not a
+test failure. If the window appears, the helper uses the same FIFO and
+per-character credential injection path proven by the removal test. It first
+dismisses any separate `Profile Downloaded` or `Profile Installed` dialog with
+an `OK` button discovered through Accessibility, so the global HID events
+cannot be intercepted above SecurityAgent.
 
 ## Strict break overlay
 
@@ -252,7 +336,7 @@ Run on the Linux machine that has this repo checked out next to the
 
 ```sh
 sync/sync-to-mac.sh                  # extract and build locally
-sync/sync-to-mac.sh mdm-admin@10.11.133.222  # also upload to appliance staging
+sync/sync-to-mac.sh appliance-admin@10.11.133.222  # also upload to appliance staging
 ```
 
 Extraction snapshots: LeechBlock settings (from Firefox's
@@ -303,8 +387,8 @@ and Safari acceptance gate.
 Santa stays in **Monitor mode** (`ClientMode=1`). Monitor mode permits unrelated
 binaries; the explicit `BLOCKLIST` rule for
 `platform:com.apple.Safari` denies Safari. Safari is not removed or modified.
-There is no Santa sync server, MDM enrollment, network extension, Lockdown mode,
-path rule, file-access rule, or WebKit helper rule in this phase.
+There is no Santa sync server, centralized enrollment, network extension,
+Lockdown mode, path rule, file-access rule, or WebKit helper rule in this phase.
 
 The source catalog also contains reviewed SigningID rules for nine alternative
 browsers inspected from current notarized vendor artifacts. Those expanded
@@ -444,8 +528,8 @@ payload does not become effective forced configuration on macOS 27, do not
 install the production profile. Use only the verified local SigningID fallback
 and document the wider bypass window.
 
-`PayloadRemovalDisallowed=true` adds local friction; it is not equivalent to a
-non-removable MDM profile.
+`PayloadRemovalDisallowed=true` adds local friction; it does not make the
+profile non-removable.
 
 ### Safari identity and rollout gate
 
@@ -516,12 +600,12 @@ expected files but does not uninstall Santa or deactivate its system extension.
   under root by design.
 - Santa blocks new Safari executions before useful browser code runs and is a
   stronger boundary than process killing, but Phase 2 remains friction-grade.
-  The profile is locally installed, not MDM-owned. An unrestricted local
+  The profile is locally installed, not centrally managed. An unrestricted local
   administrator can remove it, stop the verifier, use vendor uninstall paths,
   or modify local rules when no non-empty `StaticRules` profile is active.
 - Safari Web Apps have a distinct identity, and embedded WebViews use shared
   WebKit components. Phase 2 blocks neither automatically.
-- Root-resistant MDM `DeniedBinaries` declarations and Recovery protections
-  remain later work. Do not describe this implementation as root-resistant.
+- Root-resistant application restrictions and Recovery protections remain
+  later work. Do not describe this implementation as root-resistant.
 - The FDA grant covers only `BASE/bin/cb-bash` (deterministic ad-hoc
   signature; re-grant only if Apple updates `/bin/bash`).

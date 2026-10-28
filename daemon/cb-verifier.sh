@@ -687,8 +687,10 @@ ensure_break_agent() {
   resolve_console_user
   [ -n "$CONSOLE_UID" ] && [ "$CONSOLE_UID" != 0 ] || return
   domain="gui/$CONSOLE_UID"
+  # System Settings records its background-item toggle as a per-user launchd
+  # disable override. Clear it every pass, including while the job still exists.
+  launchctl enable "$domain/$BREAK_LABEL" >/dev/null 2>&1 || true
   if ! launchctl print "$domain/$BREAK_LABEL" >/dev/null 2>&1; then
-    launchctl enable "$domain/$BREAK_LABEL" >/dev/null 2>&1 || true
     launchctl bootstrap "$domain" "$BREAK_PLIST" >/dev/null 2>&1 || true
   fi
   if [ "$BREAK_REPAIRED" = 1 ]; then

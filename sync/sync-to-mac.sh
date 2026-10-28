@@ -9,8 +9,8 @@
 #
 # Usage:
 #   sync/sync-to-mac.sh
-#   sync/sync-to-mac.sh mdm-admin@10.11.133.222
-#   CB_RELEASE_APPLIANCE=mdm-admin@10.11.133.222 sync/sync-to-mac.sh
+#   sync/sync-to-mac.sh appliance-admin@10.11.133.222
+#   CB_RELEASE_APPLIANCE=appliance-admin@10.11.133.222 sync/sync-to-mac.sh
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,7 +25,7 @@ python3 "$REPO/sync/extract_rules.py" --out "$STAGED"
 
 if [[ -z $APPLIANCE ]]; then
   echo "Rules release staged locally: $OUTPUT"
-  echo "Upload with: $0 mdm-admin@10.11.133.222"
+  echo "Upload with: $0 appliance-admin@10.11.133.222"
   exit 0
 fi
 
@@ -35,4 +35,4 @@ tar -C "$OUTPUT" -cf - . | ssh -o BatchMode=yes "$APPLIANCE" \
   'tar -C "$HOME/chickenblocker-release-staging/rules" -xf -'
 echo "Rules release staged on $APPLIANCE:$REMOTE_PATH"
 echo "Review it, then publish an explicit next sequence from the appliance console:"
-echo "  cb-publish-release --bundle /home/mdm-admin/$REMOTE_PATH --sequence N"
+echo "  cb-publish-release --bundle /home/appliance-admin/$REMOTE_PATH --sequence N"
