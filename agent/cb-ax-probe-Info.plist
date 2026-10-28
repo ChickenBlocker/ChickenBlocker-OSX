@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>com.chickenblocker.ax-probe</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>cb-ax-probe</string>
+  <key>CFBundleName</key><string>ChickenBlocker AX Probe</string>
+  <key>CFBundleDisplayName</key><string>ChickenBlocker AX Probe</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>ChickenBlocker checks the Accessibility grant by asking System Events for the frontmost application.</string>
+</dict>
+</plist>
