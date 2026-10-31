@@ -77,18 +77,27 @@ install_local() {
     "$BASE/expected/$BREAK_LABEL.plist"
   install -m 0644 -o root -g wheel "$BASE/expected/$BREAK_LABEL.plist" "$BREAK_PLIST"
   if [ ! -f "$BASE/verifier.conf" ]; then
-    printf 'CHECK_INTERVAL=15\nRESTART_FIREFOX_ON_REPAIR=1\nEXT_RESTART_MIN_INTERVAL=300\nSANTA_CHECKS=0\nSANTA_ENFORCE_SAFARI=0\nSANTA_LOCAL_RULE_FALLBACK=1\nSANTA_REINSTALL=0\n' > "$BASE/verifier.conf"
+    printf 'CHECK_INTERVAL=15\nRESTART_FIREFOX_ON_REPAIR=1\nEXT_RESTART_MIN_INTERVAL=300\nFIREFOX_PROFILE_REINSTALL=0\nFIREFOX_PROFILE_REPAIR_MIN_INTERVAL=60\nSANTA_CHECKS=0\nSANTA_ENFORCE_SAFARI=0\nSANTA_LOCAL_RULE_FALLBACK=1\nSANTA_REINSTALL=0\n' > "$BASE/verifier.conf"
     chown root:wheel "$BASE/verifier.conf"
     chmod 0644 "$BASE/verifier.conf"
     echo ">> Wrote default $BASE/verifier.conf (preserved on reinstall)"
   else
-    for setting in SANTA_CHECKS=0 SANTA_ENFORCE_SAFARI=0 SANTA_LOCAL_RULE_FALLBACK=1 SANTA_REINSTALL=0; do
+    for setting in FIREFOX_PROFILE_REINSTALL=0 FIREFOX_PROFILE_REPAIR_MIN_INTERVAL=60 SANTA_CHECKS=0 SANTA_ENFORCE_SAFARI=0 SANTA_LOCAL_RULE_FALLBACK=1 SANTA_REINSTALL=0; do
       key="${setting%%=*}"
       grep -q "^$key=" "$BASE/verifier.conf" || printf '%s\n' "$setting" >> "$BASE/verifier.conf"
     done
+    # Migrate the previous default only; operator-tuned values are preserved.
+    if grep -q '^FIREFOX_PROFILE_REPAIR_MIN_INTERVAL=300$' "$BASE/verifier.conf"; then
+      sed -i '' 's/^FIREFOX_PROFILE_REPAIR_MIN_INTERVAL=300$/FIREFOX_PROFILE_REPAIR_MIN_INTERVAL=60/' "$BASE/verifier.conf"
+      echo ">> Migrated FIREFOX_PROFILE_REPAIR_MIN_INTERVAL 300 -> 60 in $BASE/verifier.conf"
+    fi
   fi
   install -m 0644 -o root -g wheel \
     "$REPO/config/firefox-policies.json" "$BASE/expected/firefox-policies.json"
+  install -m 0700 -o root -g wheel "$REPO/daemon/cb-profile-repair-root.sh" \
+    "$BASE/bin/profile-repair-root.sh"
+  install -m 0755 -o root -g wheel "$REPO/daemon/cb-profile-repair-user.sh" \
+    "$BASE/agent/profile-repair-user.sh"
 
   echo ">> Generating Firefox policy delivery files"
   command -v python3 >/dev/null 2>&1 || \

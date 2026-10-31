@@ -48,6 +48,8 @@ SANTA_ENFORCE_SAFARI=0
 SANTA_LOCAL_RULE_FALLBACK=1
 SANTA_REINSTALL=0
 SANTA_REPAIR_MIN_INTERVAL=60
+FIREFOX_PROFILE_REINSTALL=0
+FIREFOX_PROFILE_REPAIR_MIN_INTERVAL=60
 [ -r "$CONF" ] && . "$CONF"
 
 LB_ID="leechblockng@proginosko.com"
@@ -93,6 +95,7 @@ BREAK_SIGNATURE="$BASE/agent/$BREAK_APP/Contents/_CodeSignature/CodeResources"
 BREAK_STATE="$BASE/break-state.json"
 BREAK_COMMAND="$BASE/break-command.json"
 BREAK_REPAIRED=0
+PROFILE_REPAIR="$BASE/bin/profile-repair-root.sh"
 
 log() {
   printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOGFILE" 2>/dev/null || true
@@ -809,6 +812,44 @@ check_firefox_policy_channel() {
   fi
 }
 
+repair_firefox_policy_channel() {
+  [ "$MODE" != check ] || return
+  [ "$FIREFOX_PROFILE_REINSTALL" = 1 ] || return
+  [ "$(id -u)" = 0 ] || return
+  [ -x "$PROFILE_REPAIR" ] || {
+    warn_limited "firefox-profile-repair" "repair coordinator is missing: $PROFILE_REPAIR"
+    return
+  }
+
+  now="$(date +%s)"
+  last="$(cat "$BASE/.profile-repair-last" 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) now=0 ;; esac
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((now - last)) -ge "$FIREFOX_PROFILE_REPAIR_MIN_INTERVAL" ] || return
+  printf '%s\n' "$now" > "$BASE/.profile-repair-last" 2>/dev/null || true
+
+  log "Firefox policy inactive — starting guarded profile repair"
+  output="$("$PROFILE_REPAIR" 2>&1)"
+  status=$?
+  while IFS= read -r line; do
+    [ -z "$line" ] || log "PROFILE-REPAIR $line"
+  done <<< "$output"
+  if [ "$status" -ne 0 ]; then
+    log "ERROR Firefox profile repair failed (status $status)"
+    return
+  fi
+
+  check_firefox_policy_channel
+  if [ "$FIREFOX_POLICY_HEALTHY" = 1 ]; then
+    rm -f "$BASE/.profile-repair-last" 2>/dev/null || true
+    REPAIRED=$((REPAIRED+1))
+    REPAIRED_RESTART=1
+    log "Firefox policy profile repaired and verified"
+  else
+    log "ERROR Firefox profile repair returned success but policy remains inactive"
+  fi
+}
+
 run_pass() {
   PASS=0; FAIL=0; SKIP=0; REPAIRED=0; REPAIRED_MANAGED=0; REPAIRED_RESTART=0
   FIREFOX_POLICY_RESTART=0; FIREFOX_POLICY_HEALTHY=0; EXT_DRIFT_PROFILES=""
@@ -864,6 +905,24 @@ recovery() {
   was_running=0
   firefox_running && was_running=1
   killed=0
+
+  # Recover safely from a power loss or SIGKILL during an earlier transaction.
+  # The repair identity must never remain enabled or retain admin membership.
+  if [ -x "$PROFILE_REPAIR" ] && [ "$(id -u)" = 0 ]; then
+    "$PROFILE_REPAIR" --revoke >/dev/null 2>&1 || \
+      warn_limited "firefox-profile-account" "stale repair identity could not be revoked"
+  fi
+
+  # Close Firefox before a potentially long GUI repair transaction. If repair
+  # succeeds, the normal restart path below restores its prior running state.
+  if [ "$FIREFOX_POLICY_HEALTHY" != 1 ]; then
+    if firefox_running; then
+      log "Firefox policy inactive — quitting Firefox (fail closed)"
+      quit_firefox
+      killed=1
+    fi
+    repair_firefox_policy_channel
+  fi
 
   # Flush preference caches so a repaired managed-prefs file is re-read.
   if [ "$REPAIRED" -gt 0 ]; then

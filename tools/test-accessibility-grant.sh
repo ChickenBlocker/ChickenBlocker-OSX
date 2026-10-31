@@ -9,6 +9,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 SOURCE="$REPO/agent/cb-ax-probe.swift"
 PLIST_SRC="$REPO/agent/cb-ax-probe-Info.plist"
 KEEPER="$HOME/Applications/ChickenBlocker AX Probe.app"
+ROOT_KEEPER="/Library/Application Support/ChickenBlocker/agent/ChickenBlocker AX Probe.app"
 RESULT=$(mktemp "${TMPDIR:-/tmp}/cb-ax-probe.XXXXXX")
 GRANT_TIMEOUT=240
 PANE='x-apple.systempreferences:com.apple.Settings.extension?Privacy_Accessibility'
@@ -147,14 +148,66 @@ verify_only() {
   printf '%s\n' "verified: Accessibility grant works without any administrator."
 }
 
+install_root() {
+  local command identity ownership
+  preflight
+  require_tools
+  identity=$(codesigning_identity)
+  [[ -n $identity ]] || die "no stable code-signing identity"
+
+  build_app "$identity"
+  /usr/bin/codesign --verify --deep --strict "$KEEPER" >/dev/null 2>&1 || \
+    die "staged probe signature verification failed"
+  printf -v command \
+    '/bin/mkdir -p %q && /bin/rm -rf %q.new && /usr/bin/ditto %q %q.new && /usr/sbin/chown -R root:wheel %q.new && /bin/chmod -R go-w %q.new && /bin/rm -rf %q && /bin/mv %q.new %q' \
+    "$(dirname "$ROOT_KEEPER")" "$ROOT_KEEPER" "$KEEPER" "$ROOT_KEEPER" \
+    "$ROOT_KEEPER" "$ROOT_KEEPER" "$ROOT_KEEPER" "$ROOT_KEEPER" "$ROOT_KEEPER"
+  /usr/bin/osascript \
+    -e 'on run argv' \
+    -e 'do shell script (item 1 of argv) with administrator privileges' \
+    -e 'end run' "$command" >/dev/null
+
+  ownership=$(/usr/bin/stat -f '%Su:%Sg' "$ROOT_KEEPER")
+  [[ $ownership == root:wheel ]] || die "root probe has unexpected ownership: $ownership"
+  [[ ! -w $ROOT_KEEPER && ! -w $ROOT_KEEPER/Contents/MacOS/cb-ax-probe ]] || \
+    die "root probe remains writable by the console user"
+  /usr/bin/codesign --verify --deep --strict "$ROOT_KEEPER" >/dev/null 2>&1 || \
+    die "root probe signature verification failed"
+
+  KEEPER=$ROOT_KEEPER
+  wait_for_grant "Accessibility gate: root-owned helper" || \
+    die "Accessibility grant was not added for the root-owned helper"
+  probe >/dev/null
+  printf '%s\n' \
+    "root_keeper=$ROOT_KEEPER" \
+    "ownership=$ownership" \
+    "result=root-owned helper is protected and its Accessibility grant works"
+}
+
+verify_root() {
+  KEEPER=$ROOT_KEEPER
+  verify_only
+  ownership=$(/usr/bin/stat -f '%Su:%Sg' "$KEEPER")
+  [[ $ownership == root:wheel ]] || die "root probe has unexpected ownership: $ownership"
+  [[ ! -w $KEEPER && ! -w $KEEPER/Contents/MacOS/cb-ax-probe ]] || \
+    die "root probe is writable by the console user"
+  printf '%s\n' "verified: root-owned Accessibility helper is protected."
+}
+
 case ${1:-} in
   --verify)
     verify_only
+    ;;
+  --install-root)
+    install_root
+    ;;
+  --verify-root)
+    verify_root
     ;;
   '')
     full_test
     ;;
   *)
-    die "usage: $0 [--verify]"
+    die "usage: $0 [--verify|--install-root|--verify-root]"
     ;;
 esac

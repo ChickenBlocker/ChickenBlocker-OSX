@@ -16,7 +16,7 @@ default.
 
 | Channel                                                       | Live target on the Mac |
 | ------------------------------------------------------------- | ---------------------- |
-| Firefox policies — user configuration profile `com.chickenblocker.firefox` (managed `org.mozilla.firefox` preferences) | User profile; verifier checks presence and materialized policy sentinels every cycle |
+| Firefox policies — user configuration profile `com.chickenblocker.firefox` (managed `org.mozilla.firefox` preferences) | User profile; verifier checks presence and materialized policy sentinels every cycle and can reinstall through the guarded Accessibility helper |
 | LeechBlock settings — managed-storage manifest                | `/Library/Application Support/Mozilla/ManagedStorage/leechblockng@proginosko.com.json` |
 | PKF keyword list — managed-storage manifest                   | `/Library/Application Support/Mozilla/ManagedStorage/page-keyword-filter-7f3a@local.addons.json` |
 | PKF extension `.xpi` (signed copy pushed from Linux; space-free `file://` URL) | `/usr/local/lib/ChickenBlocker/page_keyword_filter.xpi` (+ legacy copy under `BASE/extensions/`) |
@@ -213,6 +213,16 @@ Type: Self Signed Root, Certificate Type: Code Signing), keep its private key,
 and verify again after reboot. Only after that gate passes should `svc-admin`
 be removed or made unavailable.
 
+The production helper is deployed root-owned under
+`BASE/agent/ChickenBlocker AX Probe.app` (`--install-root`), so a standard
+user cannot delete or replace it. Verified on macOS 27: disabling its
+Device Control and Data Access grant in System Settings requires
+administrator authentication, so a standard user cannot revoke it either;
+`tccutil reset com.chickenblocker.ax-probe` also fails without privileges
+and leaves the grant intact.
+`tools/test-accessibility-grant.sh --verify-root` re-checks protection and
+grant without any administrator.
+
 ### Accessibility profile transaction prototype (macOS 27)
 
 The experimental helper in `agent/cb-ax-probe.swift` proves that a stably
@@ -228,6 +238,16 @@ by payload identifier, identify removal confirmations structurally by their
 destructive button, cancel non-allowlisted operations, and terminate any
 unarmed SecurityAgent window. Restarting System Settings with a verified new
 PID clears the authorization state retained by that Settings process.
+
+During the guarded `--install-profile` transaction the helper subscribes to
+AX window/sheet-created notifications (plus System Settings and SecurityAgent
+launch notifications) so each step runs the moment its window appears instead
+of on a poll cadence, and it raises translucent, click-swallowing shield
+panels tracked over the System Settings and SecurityAgent windows so the
+console user cannot press Cancel or Don't Allow mid-transaction. The helper's
+own interactions are AX actions and PID-targeted mouse events, which pass
+under the shield; keyboard sabotage of System Settings (Cmd-Q) is not blocked,
+but that only fails the transaction into the normal retry path.
 
 Synthetic authorization was proven with a user-supplied svc-admin credential:
 the helper first observes the exact allowlisted removal confirmation, verifies
@@ -255,6 +275,9 @@ CB_TEST_BLOCKED_REMOVAL=1 ./tools/test-allowed-profile-removal.sh
 ./tools/test-accessibility-auth-input.sh
 ./tools/test-accessibility-profile-install.sh
 ./tools/test-accessibility-profile-install.sh --cleanup-only
+./tools/test-temp-admin-policy-update.sh
+# Optional, persistent third-party installation:
+./tools/test-temp-admin-policy-update.sh --virtualbox
 ```
 
 The profile install test defaults to the two disposable `.mobileconfig`
@@ -276,6 +299,27 @@ per-character credential injection path proven by the removal test. It first
 dismisses any separate `Profile Downloaded` or `Profile Installed` dialog with
 an `OK` button discovered through Accessibility, so the global HID events
 cannot be intercepted above SecurityAgent.
+
+The temporary-admin policy test currently authenticates through `svc-admin` to
+start its root phase and delete the temporary directory record afterward. Root
+creates a random short-lived administrator without a secure token; macOS 27
+still requires authenticated Open Directory authority to delete that record,
+so the signed updater will need an equivalent root-held escrow credential. The
+generated password crosses into the console-user helper through a mode-0600
+FIFO, authorizes both profile installation and update, and is then discarded.
+During those transactions a second helper disables the Device
+Management minus/remove controls, cancels any removal confirmation that races
+through, and rejects authorization windows not armed by the expected profile.
+The account is deleted on success or failure.
+
+With `--virtualbox`, the test also mounts the Arm64 DMG in the console user's
+Downloads folder after staging a temporary root-readable copy in
+`/Users/Shared`, requires the notarized Oracle installer identity `VB5E2TV963`,
+and runs the package installer through authenticated `sudo` as the temporary
+administrator. The staged image is removed afterward, but VirtualBox remains
+installed. Any later macOS request to approve Oracle system software is a
+separate manual approval, not the ChickenBlocker configuration-profile
+transaction.
 
 ## Strict break overlay
 
@@ -320,10 +364,17 @@ Postpone controls.
 
 The deployed configuration has `allow_escape: false`; Escape cannot dismiss an
 active overlay. Killing the user renderer is transient because launchd restarts
-it. Before changing renderer behavior, use `./tools/test-break-overlay.sh` for
-an unprivileged 30-second multi-display test; it writes only to a temporary
-directory. Validate physical multi-display, sleep/wake, login, and night-boundary
-behavior before publishing renderer or schedule changes.
+it. The command file doubles as a verifier heartbeat: the verifier rewrites it
+every check cycle, and when it has not been refreshed for 90 seconds — or the
+verifier stays silent for 90 seconds after a wake — the renderer removes every
+overlay, shows **Verifier inactive** in the menu, and keeps the screens
+unlocked. A dead, hung, or uninstalled verifier therefore never leaves the
+screen covered; the threshold can be tuned for tests with
+`CB_BREAK_MAX_COMMAND_AGE` seconds. Before changing renderer behavior, use
+`./tools/test-break-overlay.sh` for an unprivileged 30-second multi-display
+test; it writes only to a temporary directory. Validate physical multi-display,
+sleep/wake, login, and night-boundary behavior before publishing renderer or
+schedule changes.
 
 Calendar/camera-aware meeting pauses and the Linux post-break Start-work gate
 are not part of this first port. They require separate macOS privacy and idle
@@ -357,12 +408,16 @@ sudo "$BASE/bin/cb-bash" "$BASE/verifier.sh" daemon   # loop (what the LaunchDae
 
 Checks run every `CHECK_INTERVAL` seconds (default 15). Missing, drifting,
 or mis-permissioned files are reinstalled from the canonical copies and
-logged to `BASE/verifier.log`. A missing configuration profile is warned
-about hourly (it cannot be reinstalled headless). Config:
+logged to `BASE/verifier.log`. With `FIREFOX_PROFILE_REINSTALL=1`, a missing
+or inactive Firefox configuration profile is reinstalled through the
+root-owned, Accessibility-approved console helper. Config:
 `BASE/verifier.conf` (`CHECK_INTERVAL`, `RESTART_FIREFOX_ON_REPAIR`,
-`EXT_RESTART_MIN_INTERVAL`, `SANTA_CHECKS`, `SANTA_ENFORCE_SAFARI`,
-`SANTA_LOCAL_RULE_FALLBACK`, `SANTA_REINSTALL`). Ordinary Phase 1 reinstalls
-preserve existing values and only append missing safe defaults.
+`EXT_RESTART_MIN_INTERVAL`, `FIREFOX_PROFILE_REINSTALL`,
+`FIREFOX_PROFILE_REPAIR_MIN_INTERVAL`, `SANTA_CHECKS`, `SANTA_ENFORCE_SAFARI`,
+`SANTA_LOCAL_RULE_FALLBACK`, `SANTA_REINSTALL`; `FIREFOX_PROFILE_REPAIR_MIN_INTERVAL`
+defaults to 60). Ordinary Phase 1 reinstalls preserve existing values and only
+append missing safe defaults, except the `FIREFOX_PROFILE_REPAIR_MIN_INTERVAL`
+300-to-60 default migration.
 
 ## Phase 2: Santa and Safari
 
