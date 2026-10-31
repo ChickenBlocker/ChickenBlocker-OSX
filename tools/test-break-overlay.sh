@@ -4,6 +4,7 @@ set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/cb-break-overlay.XXXXXX")
+APP="$TMP/ChickenBlocker Breaks Test.app"
 PID=""
 cleanup() {
   [ -z "$PID" ] || kill "$PID" 2>/dev/null || true
@@ -26,9 +27,11 @@ with open(sys.argv[1], "w", encoding="utf-8") as handle:
     }, handle)
 PY
 
+mkdir -p "$APP/Contents/MacOS"
 xcrun swiftc -parse-as-library "$REPO/agent/cb-break-overlay.swift" \
-  -o "$TMP/cb-break-overlay"
+  -o "$APP/Contents/MacOS/cb-break-overlay"
+cp "$REPO/agent/cb-break-overlay-Info.plist" "$APP/Contents/Info.plist"
 CB_BREAK_COMMAND_PATH="$TMP/command.json" \
-CB_BREAK_REQUEST_PATH="$TMP/request.json" "$TMP/cb-break-overlay" &
+  CB_BREAK_REQUEST_PATH="$TMP/request.json" "$APP/Contents/MacOS/cb-break-overlay" &
 PID=$!
 sleep 30

@@ -10,6 +10,9 @@ private let commandURL = URL(fileURLWithPath: ProcessInfo.processInfo.environmen
 private let requestURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment[
     "CB_BREAK_REQUEST_PATH"
 ] ?? "/tmp/com.chickenblocker.break-request.\(getuid()).json")
+private let maxCommandAge = TimeInterval(
+    ProcessInfo.processInfo.environment["CB_BREAK_MAX_COMMAND_AGE"] ?? ""
+) ?? 90
 
 private struct BreakCommand: Decodable {
     let mode: String
@@ -138,6 +141,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
     )
     private var requestPendingAt: TimeInterval?
     private var startRequestPendingAt: TimeInterval?
+    private var lastWakeAt: TimeInterval?
     private var notifiedDeadline: TimeInterval?
     private let warningNotificationID = "com.chickenblocker.break-warning"
     private let dateFormatter: DateFormatter = {
@@ -152,6 +156,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         notificationCenter.delegate = self
         notificationCenter.requestAuthorization(options: [.alert]) { _, _ in }
         configureStatusItem()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.lastWakeAt = Date().timeIntervalSince1970 }
+        }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53, let command = self?.currentCommand, command.allowEscape {
                 self?.dismissedUntil = command.until
@@ -231,9 +240,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
         .terminateCancel
     }
 
-    private func readCommand() -> BreakCommand? {
-        guard let data = try? Data(contentsOf: commandURL) else { return nil }
-        return try? JSONDecoder().decode(BreakCommand.self, from: data)
+    private func readCommand() -> (command: BreakCommand, modifiedAt: TimeInterval)? {
+        guard let data = try? Data(contentsOf: commandURL),
+              let command = try? JSONDecoder().decode(BreakCommand.self, from: data)
+        else { return nil }
+        let attributes = try? FileManager.default.attributesOfItem(atPath: commandURL.path)
+        let modifiedAt = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        return (command, modifiedAt)
     }
 
     private func batteryStatus() -> String? {
@@ -293,7 +306,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
 
     private func refresh() {
         let now = Date().timeIntervalSince1970
-        guard let command = readCommand() else {
+        guard let read = readCommand() else {
             scheduleItem.title = "Schedule unavailable"
             takeBreakItem.isEnabled = false
             currentCommand = nil
@@ -301,6 +314,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotifica
             hideOverlay()
             return
         }
+        let commandFresh = now - read.modifiedAt <= maxCommandAge
+        let wakeSettled = lastWakeAt == nil || now - lastWakeAt! > maxCommandAge
+        guard commandFresh || !wakeSettled else {
+            scheduleItem.title = "Verifier inactive - overlay unlocked"
+            takeBreakItem.isEnabled = false
+            currentCommand = nil
+            dismissedUntil = 0
+            hideOverlay()
+            return
+        }
+        let command = read.command
         currentCommand = command
         if command.mode != "gate" {
             startRequestPendingAt = nil
