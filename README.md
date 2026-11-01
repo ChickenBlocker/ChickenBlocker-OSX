@@ -142,6 +142,21 @@ cb-publish-release --bundle /path/to/ChickenBlocker-OSX/release/smoke-add --sequ
 cb-publish-release --bundle /path/to/ChickenBlocker-OSX/release/smoke-remove --sequence 2
 ```
 
+To require explicit user action for every macOS, Security Response, system-data,
+and App Store update, publish `release/manual-updates-only` at the next sequence.
+It disables automatic checks, downloads, and installs but leaves the manual
+Software Update and App Store interfaces available:
+
+```sh
+cb-publish-release \
+  --bundle /path/to/ChickenBlocker-OSX/release/manual-updates-only \
+  --sequence N
+```
+
+Published release history on the appliance is immutable audit and rollback
+state. Do not clear old payloads or manifests; publication advances the signed
+`current.json` pointer and the protected Mac applies each higher sequence once.
+
 Routine repository deployment never opens an SSH session to the protected Mac
 and never asks the daily account for generic sudo. Build and upload an
 unprivileged staging bundle, review it on the appliance, then publish it with an
