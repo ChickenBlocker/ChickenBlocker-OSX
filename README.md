@@ -192,16 +192,94 @@ Firefox updates and only changes when `config/firefox-policies.json` does.
 ### svc-admin is temporary
 
 `svc-admin` exists only to bootstrap and approve the pieces above. Once setup
-settles it is disabled or deleted, and the signed pull channel becomes the
-only privileged change path. Before that happens, every manual grant that
-needs administrator approval must be provisioned, because a lost grant cannot
-be repaired locally once no administrator exists. In particular, gate the
-Accessibility grant for the user-session helper:
+settles it is disabled, not deleted, and the signed pull channel becomes the
+only routine privileged change path. Keep its account record, password,
+`admin` membership, and Secure Token intact for recovery. Before disabling it,
+every manual grant that needs administrator approval must be provisioned,
+because a lost grant cannot be repaired locally once no enabled administrator
+exists.
 
-```sh
-./tools/test-accessibility-grant.sh          # full gate; needs svc-admin once
-./tools/test-accessibility-grant.sh --verify # reusable later; no admin needed
-```
+Run the pre-lock gates in this order while the daily standard user remains the
+GUI console user:
+
+1. From `svc-admin`, run `sudo ./install.sh` and install the signed release
+   client if it is not already present.
+2. In System Settings -> Privacy & Security -> Full Disk Access, add the exact
+   private interpreter below and enable its switch with administrator
+   authentication. macOS may automatically recreate its row after a protected
+   access attempt, but the row is not a grant until its switch is enabled.
+
+   ```text
+   /Library/Application Support/ChickenBlocker/bin/cb-bash
+   ```
+
+3. Restart the verifier, wait for at least one cycle, and inspect the log:
+
+   ```sh
+   sudo launchctl kickstart -k system/com.chickenblocker.verifier
+   sleep 20
+   sudo tail -n 30 \
+     "/Library/Application Support/ChickenBlocker/verifier.log"
+   ```
+
+   The new `verifier started` entry must not be followed by
+   `EXTENSION-CHECK-ERROR`. A verifier audit launched through Terminal and
+   `sudo` can still show `extension-state` and `profile-stylesheets` as skipped
+   because macOS attributes that access to Terminal's responsible-process
+   chain. The LaunchDaemon log, not those two manual skips, is the authoritative
+   FDA check.
+4. Gate the Accessibility grant and install the production root-owned helper
+   while administrator approval remains available:
+
+   ```sh
+   ./tools/test-accessibility-grant.sh
+   ./tools/test-accessibility-grant.sh --install-root
+   ```
+
+5. Reboot the Mac. As the daily user, verify the protected helper and all
+   persistent jobs:
+
+   ```sh
+   ./tools/test-accessibility-grant.sh --verify-root
+   launchctl print system/com.chickenblocker.verifier
+   launchctl print system/com.chickenblocker.release
+   launchctl print "gui/$(id -u)/com.chickenblocker.breaks"
+   ```
+
+   The verifier and break agent must be running. The release client normally
+   exits after each poll, so `last exit code = 0` with its 60-second interval is
+   healthy.
+6. Bring the appliance online, verify that `current.json` is reachable, and
+   confirm the release log reports `up-to-date` or a successfully applied
+   increasing sequence:
+
+   ```sh
+   curl --fail http://10.11.133.222:8443/current.json
+   sudo tail -n 30 \
+     "/Library/Application Support/ChickenBlocker/release/release.log"
+   ```
+
+7. From `svc-admin`, run the final audit and require zero failures:
+
+   ```sh
+   sudo "/Library/Application Support/ChickenBlocker/bin/cb-bash" \
+     "/Library/Application Support/ChickenBlocker/verifier.sh" check
+   ```
+
+   The two Terminal-attributed Firefox skips described in step 3 are acceptable
+   only when the restarted LaunchDaemon log proves effective FDA.
+8. Disable the account from its authenticated shell, then end that shell:
+
+   ```sh
+   sudo pwpolicy -u svc-admin disableuser
+   exit
+   ```
+
+Do not delete `svc-admin`. Disabling it does not terminate an existing login
+session, so `exit` is part of the procedure. Re-enable it only through an
+authenticated recovery path or a reviewed signed appliance release running as
+root. After disabling it, repeat one reboot and signed-release cycle before
+considering the rollout settled.
 
 The gate installs a probe app in `~/Applications` and proves that the
 Accessibility grant works from the console user's session and survives a
@@ -211,7 +289,7 @@ is not a durable identity guarantee. Create a stable self-signed identity once
 (Keychain Access → Certificate Assistant → Create Certificate → Identity
 Type: Self Signed Root, Certificate Type: Code Signing), keep its private key,
 and verify again after reboot. Only after that gate passes should `svc-admin`
-be removed or made unavailable.
+be disabled.
 
 The production helper is deployed root-owned under
 `BASE/agent/ChickenBlocker AX Probe.app` (`--install-root`), so a standard
